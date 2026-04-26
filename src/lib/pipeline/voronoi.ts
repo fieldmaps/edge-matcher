@@ -14,12 +14,17 @@ export async function stageVoronoi(conn: AsyncDuckDBConnection): Promise<void> {
 
   // Assign source fid to each Voronoi cell via point-in-polygon.
   // ST_Intersects handles generators on cell boundaries that ST_Within would miss.
+  const origLimit = (await conn.query("SELECT current_setting('memory_limit') AS v")).toArray()[0].v as string;
+  await conn.query("CREATE INDEX layer_04_tmp1_ridx ON layer_04_tmp1 USING RTREE (geom)");
+  await conn.query("SET memory_limit = '999GB'");
   await conn.query(`--sql
     CREATE OR REPLACE TABLE layer_04_tmp2 AS
     SELECT a.fid, b.geom
     FROM layer_03 AS a
     JOIN layer_04_tmp1 AS b ON ST_Intersects(a.geom, b.geom)
   `);
+  await conn.query(`SET memory_limit = '${origLimit}'`);
+  await conn.query("DROP INDEX layer_04_tmp1_ridx");
 
   // Validate that every source point was assigned to a Voronoi cell
   const [pts, assigned] = await Promise.all([

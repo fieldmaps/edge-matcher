@@ -31,6 +31,7 @@ export async function initDuckDB(): Promise<void> {
     duckdbState.conn = conn;
 
     await conn.query("SET threads = 1");
+    await conn.query("SET preserve_insertion_order = false");
 
     try {
       try {

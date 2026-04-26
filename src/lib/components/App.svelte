@@ -2,7 +2,7 @@
   import { duckdbState, initDuckDB } from "$lib/db/duckdb.svelte";
   import { loadClipFile, loadFile } from "$lib/db/loader";
   import { runClip } from "$lib/pipeline/clip";
-  import { getOriginalGeojson, runPipeline } from "$lib/pipeline/index";
+  import { getOriginalGeojson, PipelineError, runPipeline } from "$lib/pipeline/index";
   import { onMount, untrack } from "svelte";
   import DropZone from "./DropZone.svelte";
   import MapView from "./MapView.svelte";
@@ -19,6 +19,7 @@
   let distance = $state(0.0002);
   let running = $state(false);
   let currentStage = $state(0); // 0=idle, 1-5=active stage, 6=done
+  let errorStage = $state(0);   // stage number that failed, 0=none
   let stageLabel = $state("");
   let resultGeoJSON = $state<string | null>(null);
   let originalGeoJSON = $state<string | null>(null);
@@ -64,6 +65,7 @@
     originalGeoJSON = null;
     resultBounds = null;
     currentStage = 0;
+    errorStage = 0;
     stageLabel = "";
     clipFiles = [];
     clipGeoJSON = null;
@@ -100,14 +102,20 @@
       stageLabel = "Done";
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+      errorStage = e instanceof PipelineError ? (e as PipelineError).failedStage : currentStage;
       currentStage = 0;
     } finally {
       running = false;
     }
   }
 
-  function stageStatus(idx: number): "pending" | "active" | "done" {
+  function stageStatus(idx: number): "pending" | "active" | "done" | "error" {
     const stageNum = idx + 1;
+    if (errorStage > 0) {
+      if (stageNum < errorStage) return "done";
+      if (stageNum === errorStage) return "error";
+      return "pending";
+    }
     if (currentStage === 0) return "pending";
     if (currentStage === 6) return "done";
     if (stageNum < currentStage) return "done";
@@ -193,11 +201,16 @@
       </div>
     {/if}
 
-    {#if currentStage > 0}
+    {#if currentStage > 0 || errorStage > 0}
       <ol class="stages">
         {#each STAGE_LABELS as label, i}
-          <li class={stageStatus(i)}>
-            <span class="stage-dot"></span>
+          {@const status = stageStatus(i)}
+          <li class={status}>
+            {#if status === "error"}
+              <span class="stage-x">✕</span>
+            {:else}
+              <span class="stage-dot"></span>
+            {/if}
             <span class="stage-label"
               >{i + 1 === currentStage && stageLabel ? stageLabel : label}</span
             >
@@ -334,6 +347,19 @@
   .stages li.active {
     color: #1d4ed8;
     font-weight: 500;
+  }
+
+  .stages li.error {
+    color: #dc2626;
+    font-weight: 500;
+  }
+
+  .stage-x {
+    width: 8px;
+    font-size: 0.75rem;
+    line-height: 1;
+    flex-shrink: 0;
+    text-align: center;
   }
 
   .stage-dot {

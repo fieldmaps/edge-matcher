@@ -40,6 +40,10 @@ File drop → format detection + ZIP extraction (DropZone)
 - **Svelte 5 runes:** Uses `$state()`, `$effect()`, and `untrack()` — not legacy Svelte reactivity.
 - **Path alias:** `$lib` resolves to `src/lib/` (configured in `astro.config.mjs` vite alias).
 
+### Reference Docs
+
+- `docs/performance.md` — WASM memory model, SPATIAL_JOIN behaviour differences vs. Linux, lines stage evolution, connection settings, pipeline phase memory profile
+
 ### Supported input formats
 
 GeoJSON, GeoParquet, GeoPackage, Shapefile (zip), KML, GML, GPX. Loader detects format, extracts from ZIPs via `fflate`, and registers buffers with DuckDB. GeoParquet is loaded without `ST_Read` (no geometry tag); all others use `ST_Read`.

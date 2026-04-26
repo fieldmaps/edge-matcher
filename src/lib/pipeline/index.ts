@@ -6,6 +6,13 @@ import { stageVoronoi } from "./voronoi";
 
 export type ProgressFn = (stage: number, label: string) => void;
 
+export class PipelineError extends Error {
+  constructor(message: string, public readonly failedStage: number) {
+    super(message);
+    this.name = "PipelineError";
+  }
+}
+
 const MAX_ATTEMPTS = 10;
 
 export interface PipelineResult {
@@ -36,31 +43,39 @@ export async function runPipeline(
 
   // Stage 3+4: points → Voronoi (with retry, doubling distance on failure)
   let succeeded = false;
+  let lastFailedStage = "";
+  let lastDistance = distance;
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     const d = distance * Math.pow(2, i);
+    lastDistance = d;
+    let inVoronoi = false;
     try {
       onProgress(
         3,
         i === 0
           ? "Interpolating points"
-          : `Interpolating points (retry ${i}, distance=${d.toFixed(6)})`,
+          : `Interpolating points (retry ${i}, distance=${d.toFixed(6)}, ${lastFailedStage} failed)`,
       );
       await stagePoints(conn, d);
 
+      inVoronoi = true;
       onProgress(4, "Building Voronoi diagram");
       await stageVoronoi(conn);
 
       succeeded = true;
       break;
     } catch (e) {
-      console.warn(`Attempt ${i + 1} failed at distance ${d}:`, e);
+      lastFailedStage = inVoronoi ? "voronoi" : "points";
+      console.warn(`Attempt ${i + 1} failed at ${lastFailedStage} stage (distance=${d}):`, e);
       await conn.query("DROP TABLE IF EXISTS layer_03");
       await conn.query("DROP TABLE IF EXISTS layer_04");
     }
   }
   if (!succeeded) {
-    throw new Error(
-      `Failed to generate Voronoi polygons after ${MAX_ATTEMPTS} attempts. The dataset may be too large or have topology errors.`,
+    const failedStageNum = lastFailedStage === "voronoi" ? 4 : 3;
+    throw new PipelineError(
+      `Failed to generate Voronoi polygons after ${MAX_ATTEMPTS} attempts (last distance=${lastDistance.toFixed(6)}). The dataset may be too large or have topology errors.`,
+      failedStageNum,
     );
   }
 

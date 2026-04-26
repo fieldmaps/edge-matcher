@@ -27,8 +27,12 @@
 
   let clipFiles = $state<File[]>([]);
   let clipRunning = $state(false);
+  let clipStageLabel = $state("");
   let clipGeoJSON = $state<string | null>(null);
   let clipError = $state<string | null>(null);
+
+  let clearMap: (() => void) | undefined;
+  let clearClip: (() => void) | undefined;
 
   onMount(() => {
     initDuckDB();
@@ -53,6 +57,7 @@
   });
 
   async function handleRun() {
+    clearMap?.();
     error = null;
     running = true;
     resultGeoJSON = null;
@@ -110,23 +115,30 @@
     return "pending";
   }
 
+  function fileStem(file: File): string {
+    return file.name.replace(/\.[^.]+$/, "");
+  }
+
   function download() {
     if (!resultGeoJSON) return;
     const blob = new Blob([resultGeoJSON], { type: "application/geo+json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "extended.geojson";
+    a.download = `${fileStem(files[0])}_ee.geojson`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
   async function handleClip() {
+    clearClip?.();
     clipError = null;
     clipRunning = true;
     clipGeoJSON = null;
     try {
+      clipStageLabel = "Loading clip file…";
       await loadClipFile(duckdbState.db!, duckdbState.conn!, clipFiles);
+      clipStageLabel = "Clipping…";
       const result = await runClip(duckdbState.conn!);
       clipGeoJSON = result.geojson;
       resultBounds = result.bounds ?? resultBounds;
@@ -134,6 +146,7 @@
       clipError = e instanceof Error ? e.message : String(e);
     } finally {
       clipRunning = false;
+      clipStageLabel = "";
     }
   }
 
@@ -143,7 +156,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "matched.geojson";
+    a.download = `${fileStem(clipFiles[0])}_em.geojson`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -207,7 +220,7 @@
         <p class="subtitle">Drop a clipping boundary to trim the extended result.</p>
         <DropZone bind:files={clipFiles} disabled={clipRunning} />
         {#if clipRunning}
-          <p class="clip-status">Clipping…</p>
+          <p class="clip-status">{clipStageLabel}</p>
         {/if}
         {#if clipError}
           <div class="error-panel">{clipError}</div>
@@ -227,6 +240,8 @@
       originalGeojson={originalGeoJSON}
       clipGeojson={clipGeoJSON}
       bounds={resultBounds}
+      registerClear={(fn: () => void) => { clearMap = fn; }}
+      registerClearClip={(fn: () => void) => { clearClip = fn; }}
     />
   </div>
 </div>

@@ -256,12 +256,11 @@ export async function loadClipFile(
 
   const sqlPath = "'" + filePath.replace(/'/g, "''") + "'";
   const readFn = isParquet ? `read_parquet(${sqlPath})` : `ST_Read(${sqlPath})`;
-  await conn.query(`
-    CREATE TABLE clip_raw AS
-    SELECT *, row_number() OVER () AS clip_fid FROM ${readFn}
-  `);
 
+  // Use LIMIT 0 to detect schema without materializing the full (potentially large) file.
+  await conn.query(`CREATE TABLE clip_raw AS SELECT * FROM ${readFn} LIMIT 0`);
   const desc = await conn.query("DESCRIBE clip_raw");
+  await conn.query("DROP TABLE clip_raw");
   const schema = desc.toArray() as Array<{ column_name: string; column_type: string }>;
 
   const WKB_NAMES = ["geometry", "geom", "wkb_geometry", "the_geom"];
@@ -283,10 +282,26 @@ export async function loadClipFile(
         ? `ST_Force2D(ST_Transform(ST_MakeValid(${quotedGeomCol}), 'EPSG:4326'))`
         : `ST_Force2D(ST_MakeValid(${quotedGeomCol}))`;
 
+  // Pre-filter on the raw geometry column so DuckDB skips MakeValid/Force2D/Transform
+  // for non-matching rows. For a 1GB world-countries file this means those ops only run
+  // on the 1-2 features that actually overlap the input layer.
+  const rawIntersects =
+    geomType === "BLOB"
+      ? `ST_Intersects(ST_GeomFromWKB(${quotedGeomCol}), bbox.env)`
+      : geomType !== "GEOMETRY"
+        ? `ST_Intersects(ST_Transform(${quotedGeomCol}, 'EPSG:4326'), bbox.env)`
+        : `ST_Intersects(${quotedGeomCol}, bbox.env)`;
+
   await conn.query(`
     CREATE TABLE clip_layer AS
-    SELECT ${geomExpr} AS geom FROM clip_raw
+    WITH bbox AS (
+      SELECT ST_MakeEnvelope(
+        MIN(ST_XMin(geom)), MIN(ST_YMin(geom)),
+        MAX(ST_XMax(geom)), MAX(ST_YMax(geom))
+      ) AS env FROM layer_01
+    )
+    SELECT ${geomExpr} AS geom
+    FROM ${readFn}, bbox
+    WHERE ${rawIntersects}
   `);
-
-  await conn.query("DROP TABLE clip_raw");
 }

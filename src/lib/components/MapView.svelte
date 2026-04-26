@@ -8,11 +8,15 @@
     originalGeojson = null,
     clipGeojson = null,
     bounds = null,
+    registerClear = undefined,
+    registerClearClip = undefined,
   }: {
     geojson?: string | null;
     originalGeojson?: string | null;
     clipGeojson?: string | null;
     bounds?: [number, number, number, number] | null;
+    registerClear?: (fn: () => void) => void;
+    registerClearClip?: (fn: () => void) => void;
   } = $props();
 
   let container: HTMLDivElement | undefined;
@@ -104,6 +108,25 @@
       center: [20, 5],
       zoom: Math.log2((size * Math.PI) / 512),
       attributionControl: { compact: true },
+    });
+    map.once("load", () => {
+      registerClear?.(() => {
+        if (!map) return;
+        const layers = ["original-fill", "original-line", "result-fill", "result-line", "clip-fill", "clip-line"];
+        const sources = ["original", "result", "clip"];
+        for (const layer of layers) {
+          if (map.getLayer(layer)) map.removeLayer(layer);
+        }
+        for (const source of sources) {
+          if (map.getSource(source)) map.removeSource(source);
+        }
+      });
+      registerClearClip?.(() => {
+        if (!map) return;
+        if (map.getLayer("clip-fill")) map.removeLayer("clip-fill");
+        if (map.getLayer("clip-line")) map.removeLayer("clip-line");
+        if (map.getSource("clip")) map.removeSource("clip");
+      });
     });
   });
 

@@ -79,6 +79,10 @@ export async function runPipeline(
     );
   }
 
+  // Free intermediate tables before the memory-intensive merge stage
+  await conn.query("DROP TABLE IF EXISTS layer_02");
+  await conn.query("DROP TABLE IF EXISTS layer_03");
+
   // Stage 5: merge
   onProgress(5, "Merging polygons");
   await stageMerge(conn);

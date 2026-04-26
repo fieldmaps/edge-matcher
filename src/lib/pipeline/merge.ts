@@ -35,7 +35,8 @@ export async function stageMerge(conn: AsyncDuckDBConnection): Promise<void> {
   // SPATIAL_JOIN pre-allocates ~1× RAM as virtual reservation; raising memory_limit past
   // that threshold lets the join proceed — no physical pages are mapped until real data
   // demands them. Restore original limit afterward.
-  const origLimit = (await conn.query("SELECT current_setting('memory_limit') AS v")).toArray()[0].v as string;
+  const origLimit = (await conn.query("SELECT current_setting('memory_limit') AS v")).toArray()[0]
+    .v as string;
   await conn.query("SET memory_limit = '999GB'");
 
   // Original polygon assignment (takes priority)

@@ -24,6 +24,34 @@
   let blobUrl: string | undefined;
   let origBlobUrl: string | undefined;
   let clipBlobUrl: string | undefined;
+  let spinning = false;
+  let animFrame: number | undefined;
+  let lastTime: number | undefined;
+  const SPIN_SPEED = 6;
+
+  function spinStep(timestamp: number) {
+    if (!spinning || !map) return;
+    if (lastTime !== undefined) {
+      const delta = (timestamp - lastTime) / 1000;
+      const center = map.getCenter();
+      center.lng -= SPIN_SPEED * delta;
+      map.setCenter(center);
+    }
+    lastTime = timestamp;
+    animFrame = requestAnimationFrame(spinStep);
+  }
+
+  function startSpin() {
+    spinning = true;
+    lastTime = undefined;
+    animFrame = requestAnimationFrame(spinStep);
+  }
+
+  function stopSpin() {
+    if (!spinning) return;
+    spinning = false;
+    if (animFrame !== undefined) cancelAnimationFrame(animFrame);
+  }
   const polyFilter: FilterSpecification = [
     "match",
     ["geometry-type"],
@@ -42,6 +70,7 @@
     function apply() {
       if (!map || !b) return;
       const [minLng, minLat, maxLng, maxLat] = b;
+      stopSpin();
       map.fitBounds([[minLng, minLat], [maxLng, maxLat]], { padding: 40, animate: true });
     }
     if (map.isStyleLoaded()) apply();
@@ -110,6 +139,10 @@
       attributionControl: { compact: true },
     });
     map.once("load", () => {
+      startSpin();
+      map.on("mousedown", stopSpin);
+      map.on("touchstart", stopSpin);
+      map.on("wheel", stopSpin);
       registerClear?.(() => {
         if (!map) return;
         const layers = ["original-fill", "original-line", "result-fill", "result-line", "clip-fill", "clip-line"];
@@ -155,6 +188,7 @@
   });
 
   onDestroy(() => {
+    stopSpin();
     map?.remove();
     if (blobUrl) URL.revokeObjectURL(blobUrl);
     if (origBlobUrl) URL.revokeObjectURL(origBlobUrl);

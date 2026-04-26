@@ -69,19 +69,32 @@ SELECT ST_Boundary(ST_Union_Agg(geom)) AS geom FROM layer_01
 
 No spatial join. But `ST_Union_Agg` on a large complex dataset (e.g. Chile admin3) materialises the entire polygon collection into GEOS at once → `"Allocation failure"`. `ST_CoverageUnion_Agg` has the same problem for large inputs and additionally crashes on invalid geometry.
 
-### Current implementation — plain boundary extraction
+### Attempt 4 — Plain boundary extraction
 
 ```sql
 SELECT fid, UNNEST(ST_Dump(ST_Boundary(geom))).geom AS geom FROM layer_01
 ```
 
-No aggregates, no joins, no GEOS multi-geometry operations. Processes one polygon at a time. Memory usage is O(max single polygon size), not O(dataset size).
+No aggregates, no joins. Memory usage is O(max single polygon size). But shared boundary edges appear for both neighbouring polygons, producing coincident Voronoi seeds that create degenerate near-zero-area cells. Those cells propagate into `stageMerge` where `ST_Node` and `ST_Polygonize` produce many more pieces, and the two spatial joins degrade proportionally. A dataset that finishes in seconds reverts to minutes.
 
-**Trade-off:** shared boundary edges appear for both neighbouring polygons, so Voronoi seeds are placed on interior edges too. This is acceptable because:
+### Current implementation — exterior-only via union boundary, with plain-boundary fallback
 
-1. GEOS `ST_VoronoiDiagram` handles coincident seeds (same location, different fid) without error.
-2. Both fids intersect the resulting Voronoi cell, so the assignment check (`assignedCount >= ptCount`) passes.
-3. In `merge.ts`, original polygon boundaries take priority over Voronoi cells, so interior shared-edge seeds only affect the extension space very close to where a shared boundary meets the exterior — a minor inaccuracy for most datasets.
+```sql
+-- Step 1: exterior boundary of the merged union (shared interior edges cancel out)
+CREATE TABLE layer_02_ext AS
+SELECT ST_Boundary(ST_Union_Agg(geom)) AS geom FROM layer_01;
+
+-- Step 2: per-polygon intersection with that exterior boundary
+SELECT a.fid,
+  UNNEST(ST_Dump(ST_CollectionExtract(
+    ST_Intersection(ST_Boundary(a.geom), b.geom), 2
+  ))).geom AS geom
+FROM layer_01 AS a CROSS JOIN layer_02_ext AS b;
+```
+
+`ST_Boundary(ST_Union_Agg(...))` contains only exterior-facing edges — interior shared edges are inside the merged polygon and absent from its boundary. Intersecting each polygon's own boundary ring with that exterior geometry extracts its exterior-only segments. The `CROSS JOIN` is against a **single-row** table, so the optimiser rewrites it as a nested loop (no SPATIAL_JOIN, no pre-allocation).
+
+`ST_Union_Agg` still materialises the full polygon collection in GEOS and OOMs on large datasets. When it throws, the catch block falls back to plain boundary extraction. `stagePoints` deduplicates coincident seeds via `QUALIFY` before they reach the Voronoi stage.
 
 ---
 
@@ -93,6 +106,22 @@ No aggregates, no joins, no GEOS multi-geometry operations. Processes one polygo
 | `SET preserve_insertion_order = false` | Free win. Removes sequence-tracking overhead from every intermediate buffer and eliminates the reorder pass after aggregations. No correctness impact. |
 | `SET geometry_always_xy = true` | Correctness: forces (lon, lat) coordinate order regardless of CRS definition. Required for correct EPSG:4326 output. |
 | `memory_limit` | Left at default (80% of device RAM). Explicit override only used as a workaround around the SPATIAL_JOIN reservation bug in `voronoi.ts` and `merge.ts`. |
+
+---
+
+## Points stage — endpoint exclusion removed
+
+The original `points.ts` buffered the endpoints of each line in `layer_02` and subtracted those buffers from the interpolated points. This was designed for the *old* `lines.ts` (LATERAL join approach), which produced **open line segments** — segments whose endpoints were T-junctions shared with neighbouring polygons. Excluding those junction points prevented coincident seeds from landing exactly on a shared boundary.
+
+The current `lines.ts` produces **closed rings** (`ST_Boundary(polygon)`). `ST_Boundary(closed_ring)` is `MULTIPOINT EMPTY` (closed curves have no topological endpoints in GEOS). Buffering an empty geometry returns an empty polygon; `ST_Union_Agg` of all-empty inputs returns `NULL`; `ST_Difference(points, NULL)` propagates `NULL`; `UNNEST(ST_Dump(NULL))` throws in DuckDB-WASM.
+
+The endpoint exclusion is also conceptually unnecessary for closed rings — every vertex is an interior point of the ring, not a shared junction point. The simplification removes the `layer_03_tmp` intermediate table entirely.
+
+### Coincident seed deduplication
+
+Because `lines.ts` now includes all rings (not just exterior edges), shared interior boundaries appear once per adjacent polygon. Two polygons sharing an edge both emit interpolated points at the **same coordinates**, producing coincident seeds. GEOS handles coincident Voronoi seeds, but the doubled seed count creates degenerate near-zero-area cells along every shared boundary. Those cells then propagate into `stageMerge` — `ST_Node(ST_Collect(...))` and `ST_Polygonize` produce many more tiny pieces, and the two subsequent spatial joins become proportionally slower. On a dataset that should finish in seconds this can push runtime to minutes.
+
+Fix: `QUALIFY ROW_NUMBER() OVER (PARTITION BY ST_X(geom), ST_Y(geom) ORDER BY fid) = 1` in the `layer_03` query deduplicates coincident points, keeping the lowest fid at each location. Polygons whose boundaries are entirely shared with neighbours end up with no seeds — matching old `lines.ts` behaviour where subtracted shared edges produced no seeds — and `stageMerge`'s original-polygon assignment still covers their original territory correctly.
 
 ---
 

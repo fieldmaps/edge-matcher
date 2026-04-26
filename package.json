@@ -1,5 +1,5 @@
 {
-  "name": "edge-extender-wasm",
+  "name": "edge-matcher",
   "private": true,
   "version": "0.1.0",
   "type": "module",

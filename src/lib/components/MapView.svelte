@@ -6,10 +6,12 @@
   let {
     geojson = null,
     originalGeojson = null,
+    clipGeojson = null,
     bounds = null,
   }: {
     geojson?: string | null;
     originalGeojson?: string | null;
+    clipGeojson?: string | null;
     bounds?: [number, number, number, number] | null;
   } = $props();
 
@@ -17,6 +19,7 @@
   let map: MaplibreMap | undefined;
   let blobUrl: string | undefined;
   let origBlobUrl: string | undefined;
+  let clipBlobUrl: string | undefined;
   const polyFilter: FilterSpecification = [
     "match",
     ["geometry-type"],
@@ -104,10 +107,35 @@
     });
   });
 
+  $effect(() => {
+    const clip = clipGeojson;
+    if (!clip || !map) return;
+
+    if (clipBlobUrl) URL.revokeObjectURL(clipBlobUrl);
+    clipBlobUrl = URL.createObjectURL(new Blob([clip], { type: "application/json" }));
+    const cUrl = clipBlobUrl;
+
+    function apply() {
+      if (!map) return;
+      const before = map.getLayer("original-fill") ? "original-fill" : undefined;
+      if (map.getSource("clip")) {
+        (map.getSource("clip") as GeoJSONSource).setData(cUrl);
+      } else {
+        map.addSource("clip", { type: "geojson", data: cUrl });
+        map.addLayer({ id: "clip-fill", type: "fill", source: "clip", filter: polyFilter, paint: { "fill-color": "#FB9A99", "fill-opacity": 1 } }, before);
+        map.addLayer({ id: "clip-line", type: "line", source: "clip", paint: { "line-color": "#222222", "line-width": lineWidth } }, before);
+      }
+    }
+
+    if (map.isStyleLoaded()) apply();
+    else map.once("load", () => apply());
+  });
+
   onDestroy(() => {
     map?.remove();
     if (blobUrl) URL.revokeObjectURL(blobUrl);
     if (origBlobUrl) URL.revokeObjectURL(origBlobUrl);
+    if (clipBlobUrl) URL.revokeObjectURL(clipBlobUrl);
   });
 </script>
 

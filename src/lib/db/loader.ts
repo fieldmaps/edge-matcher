@@ -211,3 +211,82 @@ export async function loadFile(
 
   await conn.query("DROP TABLE raw_layer");
 }
+
+export async function loadClipFile(
+  db: AsyncDuckDB,
+  conn: AsyncDuckDBConnection,
+  files: File[],
+): Promise<void> {
+  const expanded = await expandZips(files);
+  const group = groupByType(expanded);
+
+  await conn.query("DROP TABLE IF EXISTS clip_raw");
+  await conn.query("DROP TABLE IF EXISTS clip_layer");
+
+  let filePath: string;
+  let isParquet = false;
+
+  if (group.parquet) {
+    const file = group.parquet;
+    const buffer = removeGeoMetaKey(new Uint8Array(await file.arrayBuffer()));
+    await db.registerFileBuffer(file.name, buffer);
+    filePath = file.name;
+    isParquet = true;
+  } else if (group.spatial) {
+    const file = group.spatial;
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    await db.registerFileBuffer(file.name, buffer);
+    filePath = file.name;
+  } else if (group.shapefile) {
+    const relPaths = group.shapefile.map(
+      (f) => (f as File & { webkitRelativePath: string }).webkitRelativePath || f.name,
+    );
+    await Promise.all(
+      group.shapefile.map(async (file, i) => {
+        const buffer = new Uint8Array(await file.arrayBuffer());
+        await db.registerFileBuffer(relPaths[i], buffer);
+      }),
+    );
+    filePath = relPaths.find((p) => p.toLowerCase().endsWith(".shp")) ?? relPaths[0];
+  } else {
+    throw new Error(
+      "No supported file found. Drop a GeoJSON, GeoParquet, GeoPackage, Shapefile, or ZIP.",
+    );
+  }
+
+  const sqlPath = "'" + filePath.replace(/'/g, "''") + "'";
+  const readFn = isParquet ? `read_parquet(${sqlPath})` : `ST_Read(${sqlPath})`;
+  await conn.query(`
+    CREATE TABLE clip_raw AS
+    SELECT *, row_number() OVER () AS clip_fid FROM ${readFn}
+  `);
+
+  const desc = await conn.query("DESCRIBE clip_raw");
+  const schema = desc.toArray() as Array<{ column_name: string; column_type: string }>;
+
+  const WKB_NAMES = ["geometry", "geom", "wkb_geometry", "the_geom"];
+  const geomRow =
+    schema.find((r) => r.column_type.startsWith("GEOMETRY")) ??
+    (isParquet
+      ? schema.find(
+          (r) => r.column_type === "BLOB" && WKB_NAMES.includes(r.column_name.toLowerCase()),
+        )
+      : undefined);
+  if (!geomRow) throw new Error("No geometry column found in the clip file.");
+
+  const { column_name: geomCol, column_type: geomType } = geomRow;
+  const quotedGeomCol = JSON.stringify(geomCol);
+  const geomExpr =
+    geomType === "BLOB"
+      ? `ST_Force2D(ST_MakeValid(ST_GeomFromWKB(${quotedGeomCol})))`
+      : geomType !== "GEOMETRY"
+        ? `ST_Force2D(ST_Transform(ST_MakeValid(${quotedGeomCol}), 'EPSG:4326'))`
+        : `ST_Force2D(ST_MakeValid(${quotedGeomCol}))`;
+
+  await conn.query(`
+    CREATE TABLE clip_layer AS
+    SELECT ${geomExpr} AS geom FROM clip_raw
+  `);
+
+  await conn.query("DROP TABLE clip_raw");
+}

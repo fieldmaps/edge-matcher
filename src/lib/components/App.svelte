@@ -1,7 +1,8 @@
 <script lang="ts">
   import { duckdbState, initDuckDB } from "$lib/db/duckdb.svelte";
-  import { loadFile } from "$lib/db/loader";
-  import { runPipeline, getOriginalGeojson } from "$lib/pipeline/index";
+  import { loadClipFile, loadFile } from "$lib/db/loader";
+  import { runClip } from "$lib/pipeline/clip";
+  import { getOriginalGeojson, runPipeline } from "$lib/pipeline/index";
   import { onMount, untrack } from "svelte";
   import DropZone from "./DropZone.svelte";
   import MapView from "./MapView.svelte";
@@ -24,6 +25,11 @@
   let resultBounds = $state<[number, number, number, number] | null>(null);
   let error = $state<string | null>(null);
 
+  let clipFiles = $state<File[]>([]);
+  let clipRunning = $state(false);
+  let clipGeoJSON = $state<string | null>(null);
+  let clipError = $state<string | null>(null);
+
   onMount(() => {
     initDuckDB();
   });
@@ -37,6 +43,15 @@
     }
   });
 
+  $effect(() => {
+    const f = clipFiles;
+    if (f.length > 0 && resultGeoJSON) {
+      untrack(() => {
+        if (!clipRunning) handleClip();
+      });
+    }
+  });
+
   async function handleRun() {
     error = null;
     running = true;
@@ -45,6 +60,11 @@
     resultBounds = null;
     currentStage = 0;
     stageLabel = "";
+    clipFiles = [];
+    clipGeoJSON = null;
+    clipError = null;
+    await duckdbState.conn?.query("DROP TABLE IF EXISTS clip_layer");
+    await duckdbState.conn?.query("DROP TABLE IF EXISTS layer_clip");
 
     try {
       currentStage = 1;
@@ -64,14 +84,10 @@
       }
       originalGeoJSON = origGeoJSON;
 
-      const result = await runPipeline(
-        duckdbState.conn!,
-        distance,
-        (stage, label) => {
-          currentStage = stage;
-          stageLabel = label;
-        },
-      );
+      const result = await runPipeline(duckdbState.conn!, distance, (stage, label) => {
+        currentStage = stage;
+        stageLabel = label;
+      });
 
       resultGeoJSON = result.geojson;
       resultBounds = result.bounds ?? resultBounds;
@@ -104,6 +120,33 @@
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  async function handleClip() {
+    clipError = null;
+    clipRunning = true;
+    clipGeoJSON = null;
+    try {
+      await loadClipFile(duckdbState.db!, duckdbState.conn!, clipFiles);
+      const result = await runClip(duckdbState.conn!);
+      clipGeoJSON = result.geojson;
+      resultBounds = result.bounds ?? resultBounds;
+    } catch (e) {
+      clipError = e instanceof Error ? e.message : String(e);
+    } finally {
+      clipRunning = false;
+    }
+  }
+
+  function downloadClip() {
+    if (!clipGeoJSON) return;
+    const blob = new Blob([clipGeoJSON], { type: "application/geo+json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "matched.geojson";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 </script>
 
 <div class="layout">
@@ -111,8 +154,7 @@
     <header>
       <h1>Edge Extender</h1>
       <p class="subtitle">
-        Extend polygon boundaries using Voronoi diagrams — runs entirely in your
-        browser.
+        Extend polygon boundaries using Voronoi diagrams — runs entirely in your browser.
       </p>
     </header>
 
@@ -128,9 +170,7 @@
         step="0.0001"
         disabled={running}
       />
-      <p class="field-hint">
-        Default 0.0002 ≈ 22 m. Larger values are faster but less precise.
-      </p>
+      <p class="field-hint">Default 0.0002 ≈ 22 m. Larger values are faster but less precise.</p>
     </div>
 
     {#if duckdbState.initError}
@@ -161,11 +201,33 @@
       <button class="download-btn" onclick={download}>Download GeoJSON</button>
     {/if}
 
+    {#if resultGeoJSON && !running}
+      <div class="clip-section">
+        <h2 class="clip-heading">Edge Matching</h2>
+        <p class="subtitle">Drop a clipping boundary to trim the extended result.</p>
+        <DropZone bind:files={clipFiles} disabled={clipRunning} />
+        {#if clipRunning}
+          <p class="clip-status">Clipping…</p>
+        {/if}
+        {#if clipError}
+          <div class="error-panel">{clipError}</div>
+        {/if}
+        {#if clipGeoJSON}
+          <button class="download-btn" onclick={downloadClip}>Download GeoJSON (matched)</button>
+        {/if}
+      </div>
+    {/if}
+
     <p class="privacy">Your files never leave your device.</p>
   </aside>
 
   <div class="map-container">
-    <MapView geojson={resultGeoJSON} originalGeojson={originalGeoJSON} bounds={resultBounds} />
+    <MapView
+      geojson={resultGeoJSON}
+      originalGeojson={originalGeoJSON}
+      clipGeojson={clipGeoJSON}
+      bounds={resultBounds}
+    />
   </div>
 </div>
 
@@ -317,5 +379,26 @@
   .map-container {
     height: 100%;
     overflow: hidden;
+  }
+
+  .clip-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .clip-heading {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #111;
+    margin: 0;
+  }
+
+  .clip-status {
+    font-size: 0.825rem;
+    color: #6b7280;
+    margin: 0;
   }
 </style>

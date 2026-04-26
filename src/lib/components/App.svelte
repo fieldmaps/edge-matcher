@@ -1,0 +1,321 @@
+<script lang="ts">
+  import { duckdbState, initDuckDB } from "$lib/db/duckdb.svelte";
+  import { loadFile } from "$lib/db/loader";
+  import { runPipeline, getOriginalGeojson } from "$lib/pipeline/index";
+  import { onMount, untrack } from "svelte";
+  import DropZone from "./DropZone.svelte";
+  import MapView from "./MapView.svelte";
+
+  const STAGE_LABELS = [
+    "Load file",
+    "Extract boundary lines",
+    "Interpolate points",
+    "Build Voronoi diagram",
+    "Merge polygons",
+  ];
+
+  let files = $state<File[]>([]);
+  let distance = $state(0.0002);
+  let running = $state(false);
+  let currentStage = $state(0); // 0=idle, 1-5=active stage, 6=done
+  let stageLabel = $state("");
+  let resultGeoJSON = $state<string | null>(null);
+  let originalGeoJSON = $state<string | null>(null);
+  let resultBounds = $state<[number, number, number, number] | null>(null);
+  let error = $state<string | null>(null);
+
+  onMount(() => {
+    initDuckDB();
+  });
+
+  $effect(() => {
+    const f = files;
+    if (f.length > 0 && duckdbState.ready) {
+      untrack(() => {
+        if (!running) handleRun();
+      });
+    }
+  });
+
+  async function handleRun() {
+    error = null;
+    running = true;
+    resultGeoJSON = null;
+    originalGeoJSON = null;
+    resultBounds = null;
+    currentStage = 0;
+    stageLabel = "";
+
+    try {
+      currentStage = 1;
+      stageLabel = "Loading file…";
+      await loadFile(duckdbState.db!, duckdbState.conn!, files);
+
+      const origGeoJSON = await getOriginalGeojson(duckdbState.conn!);
+      const bboxResult = await duckdbState.conn!.query(`
+        SELECT MIN(ST_XMin(geom)) AS xmin, MIN(ST_YMin(geom)) AS ymin,
+               MAX(ST_XMax(geom)) AS xmax, MAX(ST_YMax(geom)) AS ymax
+        FROM layer_01 WHERE geom IS NOT NULL
+      `);
+      const bboxRow = bboxResult.toArray()[0] as Record<string, number>;
+      const { xmin, ymin, xmax, ymax } = bboxRow;
+      if (isFinite(xmin) && isFinite(ymin) && isFinite(xmax) && isFinite(ymax)) {
+        resultBounds = [xmin, ymin, xmax, ymax];
+      }
+      originalGeoJSON = origGeoJSON;
+
+      const result = await runPipeline(
+        duckdbState.conn!,
+        distance,
+        (stage, label) => {
+          currentStage = stage;
+          stageLabel = label;
+        },
+      );
+
+      resultGeoJSON = result.geojson;
+      resultBounds = result.bounds ?? resultBounds;
+      currentStage = 6;
+      stageLabel = "Done";
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      currentStage = 0;
+    } finally {
+      running = false;
+    }
+  }
+
+  function stageStatus(idx: number): "pending" | "active" | "done" {
+    const stageNum = idx + 1;
+    if (currentStage === 0) return "pending";
+    if (currentStage === 6) return "done";
+    if (stageNum < currentStage) return "done";
+    if (stageNum === currentStage) return "active";
+    return "pending";
+  }
+
+  function download() {
+    if (!resultGeoJSON) return;
+    const blob = new Blob([resultGeoJSON], { type: "application/geo+json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "extended.geojson";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+</script>
+
+<div class="layout">
+  <aside class="sidebar">
+    <header>
+      <h1>Edge Extender</h1>
+      <p class="subtitle">
+        Extend polygon boundaries using Voronoi diagrams — runs entirely in your
+        browser.
+      </p>
+    </header>
+
+    <DropZone bind:files disabled={running} />
+
+    <div class="field">
+      <label for="distance">Point spacing (degrees)</label>
+      <input
+        id="distance"
+        type="number"
+        bind:value={distance}
+        min="0.00001"
+        step="0.0001"
+        disabled={running}
+      />
+      <p class="field-hint">
+        Default 0.0002 ≈ 22 m. Larger values are faster but less precise.
+      </p>
+    </div>
+
+    {#if duckdbState.initError}
+      <div class="error-panel">
+        <strong>Initialisation error:</strong>
+        {duckdbState.initError}
+      </div>
+    {/if}
+
+    {#if currentStage > 0}
+      <ol class="stages">
+        {#each STAGE_LABELS as label, i}
+          <li class={stageStatus(i)}>
+            <span class="stage-dot"></span>
+            <span class="stage-label"
+              >{i + 1 === currentStage && stageLabel ? stageLabel : label}</span
+            >
+          </li>
+        {/each}
+      </ol>
+    {/if}
+
+    {#if error}
+      <div class="error-panel">{error}</div>
+    {/if}
+
+    {#if resultGeoJSON}
+      <button class="download-btn" onclick={download}>Download GeoJSON</button>
+    {/if}
+
+    <p class="privacy">Your files never leave your device.</p>
+  </aside>
+
+  <div class="map-container">
+    <MapView geojson={resultGeoJSON} originalGeojson={originalGeoJSON} bounds={resultBounds} />
+  </div>
+</div>
+
+<style>
+  .layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.25rem;
+    overflow-y: auto;
+    border-right: 1px solid #e5e7eb;
+    background: #fff;
+  }
+
+  header h1 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #111;
+    margin: 0 0 0.25rem;
+  }
+
+  .subtitle {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin: 0;
+    line-height: 1.4;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .field label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #374151;
+  }
+
+  .field input {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .field input:disabled {
+    background: #f3f4f6;
+    color: #9ca3af;
+  }
+
+  .field-hint {
+    font-size: 0.75rem;
+    color: #9ca3af;
+    margin: 0;
+  }
+
+  .stages {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .stages li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: #9ca3af;
+  }
+
+  .stages li.done {
+    color: #16a34a;
+  }
+
+  .stages li.active {
+    color: #1d4ed8;
+    font-weight: 500;
+  }
+
+  .stage-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+
+  .stages li.active .stage-dot {
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.3;
+    }
+  }
+
+  .error-panel {
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.825rem;
+    color: #b91c1c;
+    word-break: break-word;
+  }
+
+  .download-btn {
+    background: #1d4ed8;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 0.6rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    width: 100%;
+  }
+
+  .download-btn:hover {
+    background: #1e40af;
+  }
+
+  .privacy {
+    font-size: 0.75rem;
+    color: #9ca3af;
+    margin: 0;
+    margin-top: auto;
+  }
+
+  .map-container {
+    height: 100%;
+    overflow: hidden;
+  }
+</style>

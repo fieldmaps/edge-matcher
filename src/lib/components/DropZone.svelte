@@ -4,9 +4,13 @@
   let {
     files = $bindable<File[]>([]),
     disabled = false,
+    helpText = "GeoJSON · GeoParquet · GeoPackage · Shapefile (ZIP)",
+    disabledMessage,
   }: {
     files?: File[];
     disabled?: boolean;
+    helpText?: string;
+    disabledMessage?: string;
   } = $props();
 
   const SINGLE_EXTS = [
@@ -194,7 +198,9 @@
   role="region"
   aria-label="File upload drop zone"
 >
-  <p class="drop-message">Drop a file here</p>
+  <p class="drop-message">
+    {disabled && disabledMessage && files.length === 0 ? disabledMessage : "Drop a file here"}
+  </p>
   <label class="browse-label">
     <input
       type="file"
@@ -206,7 +212,7 @@
     />
     <span class="browse-link">or browse</span>
   </label>
-  <p class="hint">GeoJSON · GeoParquet · GeoPackage · Shapefile (ZIP)</p>
+  <p class="hint">{helpText}</p>
 
   {#if files.length > 0}
     <p class="file-list">

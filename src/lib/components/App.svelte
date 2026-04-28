@@ -173,26 +173,14 @@
 <div class="layout">
   <aside class="sidebar">
     <header>
-      <h1>Edge Extender</h1>
-      <p class="subtitle">
-        Extend polygon boundaries using Voronoi diagrams — runs entirely in your browser.
+      <h1>Edge Matcher</h1>
+      <p class="tagline">Edge Extender + clip — fully in your browser.</p>
+      <p class="blurb">
+        Fix gaps and overlaps where adjacent polygon boundaries don't line up — for example ADM3
+        sub-national areas that don't match their ADM0 country edge. Drop a polygon layer; the tool
+        extends each polygon's edges outward via a Voronoi diagram so they meet cleanly.
       </p>
     </header>
-
-    <DropZone bind:files disabled={running} />
-
-    <div class="field">
-      <label for="distance">Point spacing (degrees)</label>
-      <input
-        id="distance"
-        type="number"
-        bind:value={distance}
-        min="0.00001"
-        step="0.0001"
-        disabled={running}
-      />
-      <p class="field-hint">Default 0.0002 ≈ 22 m. Larger values are faster but less precise.</p>
-    </div>
 
     {#if duckdbState.initError}
       <div class="error-panel">
@@ -201,48 +189,82 @@
       </div>
     {/if}
 
-    {#if currentStage > 0 || errorStage > 0}
-      <ol class="stages">
-        {#each STAGE_LABELS as label, i}
-          {@const status = stageStatus(i)}
-          <li class={status}>
-            {#if status === "error"}
-              <span class="stage-x">✕</span>
-            {:else}
-              <span class="stage-dot"></span>
-            {/if}
-            <span class="stage-label"
-              >{i + 1 === currentStage && stageLabel ? stageLabel : label}</span
-            >
-          </li>
-        {/each}
-      </ol>
-    {/if}
+    <section class="step">
+      <h2 class="step-heading">Step 1 — Extend boundaries</h2>
+      <DropZone
+        bind:files
+        disabled={running}
+        helpText="Polygon layer in WGS84 — admin boundaries, basins, etc. GeoJSON · GeoParquet · GeoPackage · Shapefile (ZIP)."
+      />
 
-    {#if error}
-      <div class="error-panel">{error}</div>
-    {/if}
+      <details class="advanced">
+        <summary>Advanced settings</summary>
+        <div class="field">
+          <label for="distance">Point spacing along boundary</label>
+          <input
+            id="distance"
+            type="number"
+            bind:value={distance}
+            min="0.00001"
+            step="0.0001"
+            disabled={running}
+          />
+          <p class="field-hint">
+            Default 0.0002° (~22 m) handles country-scale data. Increase to ~0.002° for world-scale;
+            decrease to ~0.00002° for neighbourhood-scale.
+          </p>
+        </div>
+      </details>
 
-    {#if resultGeoJSON}
-      <button class="download-btn" onclick={download}>Download GeoJSON</button>
-    {/if}
+      {#if currentStage > 0 || errorStage > 0}
+        <ol class="stages">
+          {#each STAGE_LABELS as label, i}
+            {@const status = stageStatus(i)}
+            <li class={status}>
+              {#if status === "error"}
+                <span class="stage-x">✕</span>
+              {:else}
+                <span class="stage-dot"></span>
+              {/if}
+              <span class="stage-label"
+                >{i + 1 === currentStage && stageLabel ? stageLabel : label}</span
+              >
+            </li>
+          {/each}
+        </ol>
+      {/if}
 
-    {#if resultGeoJSON && !running}
-      <div class="clip-section">
-        <h2 class="clip-heading">Edge Matching</h2>
-        <p class="subtitle">Drop a clipping boundary to trim the extended result.</p>
-        <DropZone bind:files={clipFiles} disabled={clipRunning} />
-        {#if clipRunning}
-          <p class="clip-status">{clipStageLabel}</p>
-        {/if}
-        {#if clipError}
-          <div class="error-panel">{clipError}</div>
-        {/if}
-        {#if clipGeoJSON}
-          <button class="download-btn" onclick={downloadClip}>Download GeoJSON (matched)</button>
-        {/if}
-      </div>
-    {/if}
+      {#if error}
+        <div class="error-panel">{error}</div>
+      {/if}
+
+      {#if resultGeoJSON}
+        <button class="download-btn" onclick={download}>Download GeoJSON</button>
+      {/if}
+    </section>
+
+    <section class="step">
+      <h2 class="step-heading">Step 2 — Clip to a known boundary <span class="optional">(optional)</span></h2>
+      <p class="step-blurb">
+        Trim the extended result to a boundary you trust (e.g. an official ADM0) to remove ocean
+        overshoot.
+      </p>
+      <DropZone
+        bind:files={clipFiles}
+        disabled={!resultGeoJSON || running || clipRunning}
+        helpText="Single polygon (or polygons) to clip the extended result to."
+        disabledMessage="Finish Step 1 first"
+      />
+      {#if clipRunning}
+        <p class="clip-status">{clipStageLabel}</p>
+      {/if}
+      {#if clipError}
+        <div class="error-panel">{clipError}</div>
+      {/if}
+      {#if clipGeoJSON}
+        <button class="download-btn" onclick={downloadClip}>Download GeoJSON (matched)</button>
+      {/if}
+    </section>
 
     <p class="privacy">Your files never leave your device.</p>
   </aside>
@@ -284,11 +306,65 @@
     margin: 0 0 0.25rem;
   }
 
-  .subtitle {
+  .tagline {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin: 0 0 0.6rem;
+    line-height: 1.4;
+  }
+
+  .blurb {
+    font-size: 0.825rem;
+    color: #374151;
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .step {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .step-heading {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #111;
+    margin: 0;
+  }
+
+  .optional {
+    font-weight: 400;
+    color: #9ca3af;
+    font-size: 0.85rem;
+  }
+
+  .step-blurb {
     font-size: 0.8rem;
     color: #6b7280;
     margin: 0;
     line-height: 1.4;
+  }
+
+  .advanced {
+    font-size: 0.8rem;
+  }
+
+  .advanced > summary {
+    cursor: pointer;
+    color: #6b7280;
+    user-select: none;
+    padding: 0.1rem 0;
+  }
+
+  .advanced > summary:hover {
+    color: #374151;
+  }
+
+  .advanced[open] > summary {
+    margin-bottom: 0.5rem;
   }
 
   .field {
@@ -420,21 +496,6 @@
   .map-container {
     height: 100%;
     overflow: hidden;
-  }
-
-  .clip-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid #e5e7eb;
-  }
-
-  .clip-heading {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #111;
-    margin: 0;
   }
 
   .clip-status {

@@ -1,7 +1,7 @@
 import type { AsyncDuckDBConnection } from "@duckdb/duckdb-wasm";
 
 export async function stageVoronoi(conn: AsyncDuckDBConnection): Promise<void> {
-  // Voronoi diagram from all input points
+  // Voronoi diagram from all generator points
   await conn.query(`--sql
     CREATE OR REPLACE TABLE layer_04_tmp1 AS
     SELECT UNNEST(ST_Dump(
@@ -9,35 +9,41 @@ export async function stageVoronoi(conn: AsyncDuckDBConnection): Promise<void> {
         ST_VoronoiDiagram(ST_Collect(list(geom))), 3
       )
     )).geom AS geom
-    FROM layer_03
+    FROM layer_03b
   `);
 
-  // Assign source fid to each Voronoi cell via point-in-polygon.
-  // ST_Intersects handles generators on cell boundaries that ST_Within would miss.
-  const origLimit = (await conn.query("SELECT current_setting('memory_limit') AS v")).toArray()[0].v as string;
+  // Assign source fid to each Voronoi cell via point-in-polygon. ST_Intersects
+  // (not ST_Within) handles generators that land exactly on a cell boundary.
+  // ST_Intersects in JOIN ON triggers SPATIAL_JOIN's ~1× memory_limit virtual
+  // reservation; in WASM that becomes real allocation. The 999GB override
+  // lets the join proceed (joined tables bounded by MAX_POINTS = 10M).
+  const origLimit = (await conn.query("SELECT current_setting('memory_limit') AS v")).toArray()[0]
+    .v as string;
   await conn.query("CREATE INDEX layer_04_tmp1_ridx ON layer_04_tmp1 USING RTREE (geom)");
   await conn.query("SET memory_limit = '999GB'");
   await conn.query(`--sql
     CREATE OR REPLACE TABLE layer_04_tmp2 AS
     SELECT a.fid, b.geom
-    FROM layer_03 AS a
+    FROM layer_03b AS a
     JOIN layer_04_tmp1 AS b ON ST_Intersects(a.geom, b.geom)
   `);
   await conn.query(`SET memory_limit = '${origLimit}'`);
   await conn.query("DROP INDEX layer_04_tmp1_ridx");
 
-  // Validate that every source point was assigned to a Voronoi cell
+  // Validate that every source point was assigned to a Voronoi cell. Failure
+  // throws into the retry loop, which doubles spacing and tries again.
   const [pts, assigned] = await Promise.all([
-    conn.query("SELECT COUNT(DISTINCT fid) AS n FROM layer_03"),
+    conn.query("SELECT COUNT(DISTINCT fid) AS n FROM layer_03b"),
     conn.query("SELECT COUNT(DISTINCT fid) AS n FROM layer_04_tmp2"),
   ]);
   const ptCount = Number(pts.toArray()[0].n);
   const assignedCount = Number(assigned.toArray()[0].n);
   if (assignedCount < ptCount) {
-    await conn.query("DROP TABLE IF EXISTS layer_04_tmp1");
-    await conn.query("DROP TABLE IF EXISTS layer_04_tmp2");
     throw new Error(`Voronoi assignment incomplete: ${assignedCount}/${ptCount} fids assigned`);
   }
+
+  await conn.query("DROP TABLE IF EXISTS layer_03b");
+  await conn.query("DROP TABLE IF EXISTS layer_04_tmp1");
 
   // Union Voronoi cells by fid
   await conn.query(`--sql
@@ -47,6 +53,5 @@ export async function stageVoronoi(conn: AsyncDuckDBConnection): Promise<void> {
     GROUP BY fid
   `);
 
-  await conn.query("DROP TABLE IF EXISTS layer_04_tmp1");
   await conn.query("DROP TABLE IF EXISTS layer_04_tmp2");
 }

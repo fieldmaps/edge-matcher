@@ -14,6 +14,7 @@ export class PipelineError extends Error {
 }
 
 const MAX_ATTEMPTS = 10;
+const MAX_POINTS = 10_000_000;
 
 export interface PipelineResult {
   geojson: string;
@@ -32,16 +33,60 @@ export async function getOriginalGeojson(conn: AsyncDuckDBConnection): Promise<s
   return JSON.stringify({ type: "FeatureCollection", features });
 }
 
+async function runValidation(
+  conn: AsyncDuckDBConnection,
+  finalTable: string,
+  origTable: string,
+): Promise<void> {
+  // Each check is wrapped independently so a single failure (e.g. ST_Union_Agg
+  // in the gap check OOMing on a huge result) doesn't abort the others.
+  try {
+    const r = await conn.query(`--sql
+      SELECT ST_CoverageInvalidEdges_Agg(geom) IS NOT NULL AS bad
+      FROM (SELECT UNNEST(ST_Dump(geom)).geom AS geom FROM ${finalTable})
+    `);
+    if (r.toArray()[0].bad) console.warn(`OVERLAPS in ${finalTable}`);
+  } catch (e) {
+    console.warn("overlap check failed:", e);
+  }
+
+  try {
+    const r = await conn.query(`--sql
+      WITH u AS (
+        SELECT ST_Union_Agg(geom) AS g
+        FROM (SELECT UNNEST(ST_Dump(geom)).geom AS geom FROM ${finalTable})
+      )
+      SELECT ST_NumInteriorRings(g) AS n FROM u
+    `);
+    const n = Number(r.toArray()[0].n ?? 0);
+    if (n > 0) console.warn(`GAPS in ${finalTable}: ${n} interior rings`);
+  } catch (e) {
+    console.warn("gap check failed:", e);
+  }
+
+  try {
+    const [a, b] = await Promise.all([
+      conn.query(`SELECT COUNT(*) AS n FROM ${finalTable}`),
+      conn.query(`SELECT COUNT(*) AS n FROM ${origTable}`),
+    ]);
+    const na = Number((a.toArray()[0] as { n: bigint | number }).n);
+    const nb = Number((b.toArray()[0] as { n: bigint | number }).n);
+    if (na !== nb) console.warn(`ROW MISMATCH: ${finalTable}=${na} vs ${origTable}=${nb}`);
+  } catch (e) {
+    console.warn("row count check failed:", e);
+  }
+}
+
 export async function runPipeline(
   conn: AsyncDuckDBConnection,
   distance: number,
   onProgress: ProgressFn,
 ): Promise<PipelineResult> {
-  // Stage 2: boundary lines
+  // Stage 2: lines (single attempt; _02a/_02b are stable across retries)
   onProgress(2, "Extracting boundary lines");
   await stageLines(conn);
 
-  // Stage 3+4: points → Voronoi (with retry, doubling distance on failure)
+  // Stages 3+4: points → MAX_POINTS check → voronoi, retry with doubling
   let succeeded = false;
   let lastFailedStage = "";
   let lastDistance = distance;
@@ -58,6 +103,11 @@ export async function runPipeline(
       );
       await stagePoints(conn, d);
 
+      const cnt = Number(
+        (await conn.query("SELECT COUNT(*) AS n FROM layer_03b")).toArray()[0].n,
+      );
+      if (cnt > MAX_POINTS) throw new Error(`too many points: ${cnt.toLocaleString()}`);
+
       inVoronoi = true;
       onProgress(4, "Building Voronoi diagram");
       await stageVoronoi(conn);
@@ -67,8 +117,16 @@ export async function runPipeline(
     } catch (e) {
       lastFailedStage = inVoronoi ? "voronoi" : "points";
       console.warn(`Attempt ${i + 1} failed at ${lastFailedStage} stage (distance=${d}):`, e);
-      await conn.query("DROP TABLE IF EXISTS layer_03");
-      await conn.query("DROP TABLE IF EXISTS layer_04");
+      // Drop only points/voronoi tables; preserve _02a/_02b across retries.
+      for (const t of [
+        "layer_03a",
+        "layer_03b",
+        "layer_04_tmp1",
+        "layer_04_tmp2",
+        "layer_04",
+      ]) {
+        await conn.query(`DROP TABLE IF EXISTS ${t}`);
+      }
     }
   }
   if (!succeeded) {
@@ -79,15 +137,14 @@ export async function runPipeline(
     );
   }
 
-  // Free intermediate tables before the memory-intensive merge stage
-  await conn.query("DROP TABLE IF EXISTS layer_02");
-  await conn.query("DROP TABLE IF EXISTS layer_03");
-
   // Stage 5: merge
   onProgress(5, "Merging polygons");
   await stageMerge(conn);
 
-  // Query bounds before extraction
+  // Topology validation (warn-only)
+  await runValidation(conn, "layer_05", "layer_01");
+
+  // Bounds for map fit
   let bounds: [number, number, number, number] | null = null;
   try {
     const bboxResult = await conn.query(`--sql
@@ -108,7 +165,8 @@ export async function runPipeline(
     // bounds stays null
   }
 
-  // Build GeoJSON via ST_AsGeoJSON — avoids GDAL driver type/geometry incompatibilities.
+  // GeoJSON export with attribute join. ST_AsGeoJSON avoids GDAL driver
+  // type/geometry incompatibilities.
   const attrDesc = await conn.query("DESCRIBE layer_attr");
   const attrSchema = attrDesc.toArray() as Array<{
     column_name: string;

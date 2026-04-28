@@ -14,12 +14,12 @@
     "update": "npx npm-check-updates -u && npm install"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.8",
-    "@astrojs/svelte": "^8.0.5",
+    "@astrojs/check": "^0.9.9",
+    "@astrojs/svelte": "^8.1.0",
     "@eslint/compat": "^2.0.5",
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.6.0",
-    "astro": "^6.1.9",
+    "astro": "^6.1.10",
     "eslint": "^10.2.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-astro": "^1.7.0",
@@ -28,7 +28,7 @@
     "prettier-plugin-astro": "^0.14.1",
     "svelte": "^5.55.5",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.59.0"
+    "typescript-eslint": "^8.59.1"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",

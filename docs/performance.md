@@ -1,6 +1,6 @@
 # Performance Notes
 
-Memory constraints and findings for DuckDB-WASM in the browser. The sister Python pipeline (`edge-extender`) has server-side notes; this file covers behaviour that differs in the WASM context.
+Memory constraints and findings for DuckDB-WASM in the browser. The sister Python pipeline (`edge-extender`) has its own server-side notes; this file covers behaviour that differs in the WASM context. Algorithmic structure and SQL are ported verbatim from edge-extender — see that repo's `docs/performance.md` for profiling history.
 
 ---
 
@@ -21,80 +21,29 @@ DuckDB on Linux uses virtual memory. The SPATIAL_JOIN operator pre-allocates ~1�
 
 ## SPATIAL_JOIN operator
 
-**What triggers it:** any `ST_Intersects`, `ST_Within`, or `ST_Contains` predicate in a JOIN — including LATERAL subqueries. DuckDB's optimiser always rewrites these to `SPATIAL_JOIN`.
+**What triggers it:** any `ST_Intersects`, `ST_Within`, or `ST_Contains` predicate in a JOIN ON clause — including LATERAL subqueries and correlated `EXISTS` / `NOT EXISTS` subqueries with a spatial predicate. DuckDB's optimiser rewrites these to `SPATIAL_JOIN`.
 
 **WASM consequence:** because the reservation maps real pages, queries with SPATIAL_JOIN OOM immediately on memory-constrained devices, even when the actual data being joined is tiny.
 
-**Fix:** restructure queries to avoid SPATIAL_JOIN entirely. Patterns that work in WASM:
+### Patterns that work in WASM
 
-- Aggregate over one table (`ST_Union_Agg`, `ST_Node`) with no join.
-- `CROSS JOIN` against a single-row intermediate table — the optimiser sees it as a nested loop, not a spatial join.
-- Per-row scalar spatial functions (`ST_Intersection`, `ST_Difference`, `ST_Boundary`) against a scalar geometry value.
+- **Aggregate over one table** with no join (`ST_Union_Agg`, `ST_Node`, `ST_VoronoiDiagram`).
+- **`CROSS JOIN` against a single-row intermediate table** — the optimiser sees it as a nested loop, not a spatial join. Useful for "subtract this one global geometry from each row" patterns.
+- **Per-row scalar spatial functions** against a scalar geometry value (`ST_Intersection`, `ST_Difference`, `ST_Boundary`).
+- **Bbox-prefiltered self-join.** Replace `JOIN b ON ST_Intersects(a.geom, b.geom)` with explicit scalar bbox-overlap predicates: `ST_XMax(b) >= ST_XMin(a) AND ST_XMin(b) <= ST_XMax(a) AND ST_YMax(b) >= ST_YMin(a) AND ST_YMin(b) <= ST_YMax(a)`. DuckDB plans this as `PIECEWISE_MERGE_JOIN` (range join), not `SPATIAL_JOIN`.
+- **Bbox-prefiltered point-in-polygon.** For `JOIN ... ON ST_Within(p.pt, c.geom)`, add `ST_X(p.pt) >= ST_XMin(c.geom) AND ... AND ST_Within(p.pt, c.geom)`. The bbox predicates are necessary conditions for `ST_Within`, so semantics are preserved; the planner uses them as the join keys and `ST_Within` becomes a residual `FILTER`. Same for `NOT EXISTS` correlated subqueries.
 
-The `memory_limit = '999GB'` workaround from `edge-extender` is applied in `voronoi.ts` and `merge.ts` where the joined tables are small (points against polygons). It should **not** be applied where the joined tables are large, as it removes the only safety valve against genuine WASM heap exhaustion.
+These bbox-prefilter patterns are what make most of the pipeline WASM-safe without `memory_limit` overrides. They were profiled in edge-extender as identical-output and faster than the LATERAL+`ST_Intersects` forms they replaced.
 
 ---
 
-## Lines stage evolution (`pipeline/lines.ts`)
+## The remaining WASM-only adaptation: `voronoi.ts` `_04_tmp2`
 
-The lines stage extracts exterior-facing boundary segments per polygon (edges not shared with any neighbour). Three approaches were tried before reaching the current implementation.
+The Voronoi cell-to-fid assignment uses `JOIN ... ON ST_Intersects(a.geom, b.geom)` (point × cell) and cannot use a bbox prefilter without changing semantics — generators that land exactly on a cell boundary must intersect both adjacent cells, and the bbox prefilter would still trigger `SPATIAL_JOIN` because the predicate is `ST_Intersects` rather than `ST_Within`.
 
-### Attempt 1 — LATERAL join (original)
+The mitigation: wrap the join with `SET memory_limit = '999GB'` + an RTREE index, then restore the original limit. This is the one place the WASM SPATIAL_JOIN reservation cannot be avoided structurally. It works because the joined tables are small (bounded by `MAX_POINTS = 10M` generators × roughly equal cell count) and the reservation never triggers a real allocation past the working set.
 
-```sql
-LEFT JOIN LATERAL (
-  SELECT ST_Union_Agg(b.geom) AS neighbor_union
-  FROM layer_02_tmp AS b
-  WHERE b.fid != a.fid AND ST_Intersects(a.geom, b.geom)
-) AS sub ON true
-```
-
-**Failure:** `ST_Intersects` in LATERAL triggers SPATIAL_JOIN → `"Allocation failure"` on large datasets.
-
-### Attempt 2 — Bulk pairwise spatial join
-
-```sql
-SELECT ST_Intersection(a.geom, b.geom) AS geom
-FROM layer_02_tmp AS a
-JOIN layer_02_tmp AS b ON a.fid < b.fid AND ST_Intersects(a.geom, b.geom)
-```
-
-Still uses `ST_Intersects` in a JOIN → still triggers SPATIAL_JOIN → same failure.
-
-### Attempt 3 — Global union approach
-
-```sql
-SELECT ST_Boundary(ST_Union_Agg(geom)) AS geom FROM layer_01
-```
-
-No spatial join. But `ST_Union_Agg` on a large complex dataset (e.g. Chile admin3) materialises the entire polygon collection into GEOS at once → `"Allocation failure"`. `ST_CoverageUnion_Agg` has the same problem for large inputs and additionally crashes on invalid geometry.
-
-### Attempt 4 — Plain boundary extraction
-
-```sql
-SELECT fid, UNNEST(ST_Dump(ST_Boundary(geom))).geom AS geom FROM layer_01
-```
-
-No aggregates, no joins. Memory usage is O(max single polygon size). But shared boundary edges appear for both neighbouring polygons, producing coincident Voronoi seeds that create degenerate near-zero-area cells. Those cells propagate into `stageMerge` where `ST_Node` and `ST_Polygonize` produce many more pieces, and the two spatial joins degrade proportionally. A dataset that finishes in seconds reverts to minutes.
-
-### Current implementation — exterior-only via union boundary, with plain-boundary fallback
-
-```sql
--- Step 1: exterior boundary of the merged union (shared interior edges cancel out)
-CREATE TABLE layer_02_ext AS
-SELECT ST_Boundary(ST_Union_Agg(geom)) AS geom FROM layer_01;
-
--- Step 2: per-polygon intersection with that exterior boundary
-SELECT a.fid,
-  UNNEST(ST_Dump(ST_CollectionExtract(
-    ST_Intersection(ST_Boundary(a.geom), b.geom), 2
-  ))).geom AS geom
-FROM layer_01 AS a CROSS JOIN layer_02_ext AS b;
-```
-
-`ST_Boundary(ST_Union_Agg(...))` contains only exterior-facing edges — interior shared edges are inside the merged polygon and absent from its boundary. Intersecting each polygon's own boundary ring with that exterior geometry extracts its exterior-only segments. The `CROSS JOIN` is against a **single-row** table, so the optimiser rewrites it as a nested loop (no SPATIAL_JOIN, no pre-allocation).
-
-`ST_Union_Agg` still materialises the full polygon collection in GEOS and OOMs on large datasets. When it throws, the catch block falls back to plain boundary extraction. `stagePoints` deduplicates coincident seeds via `QUALIFY` before they reach the Voronoi stage.
+The 999GB override is **not** applied anywhere else in the pipeline. `lines.ts` (bbox self-join), `merge.ts` `_05_tmp1` (bbox-prefiltered NOT EXISTS), and `merge.ts` `_05` (bbox-prefiltered LEFT JOIN) all plan as `PIECEWISE_MERGE_JOIN` or `HASH_JOIN` and stay safely within the WASM heap.
 
 ---
 
@@ -105,23 +54,7 @@ FROM layer_01 AS a CROSS JOIN layer_02_ext AS b;
 | `SET threads = 1` | Primary memory dial. In WASM, DuckDB is single-threaded anyway; this makes it explicit and prevents unexpected parallel allocations. |
 | `SET preserve_insertion_order = false` | Free win. Removes sequence-tracking overhead from every intermediate buffer and eliminates the reorder pass after aggregations. No correctness impact. |
 | `SET geometry_always_xy = true` | Correctness: forces (lon, lat) coordinate order regardless of CRS definition. Required for correct EPSG:4326 output. |
-| `memory_limit` | Left at default (80% of device RAM). Explicit override only used as a workaround around the SPATIAL_JOIN reservation bug in `voronoi.ts` and `merge.ts`. |
-
----
-
-## Points stage — endpoint exclusion removed
-
-The original `points.ts` buffered the endpoints of each line in `layer_02` and subtracted those buffers from the interpolated points. This was designed for the *old* `lines.ts` (LATERAL join approach), which produced **open line segments** — segments whose endpoints were T-junctions shared with neighbouring polygons. Excluding those junction points prevented coincident seeds from landing exactly on a shared boundary.
-
-The current `lines.ts` produces **closed rings** (`ST_Boundary(polygon)`). `ST_Boundary(closed_ring)` is `MULTIPOINT EMPTY` (closed curves have no topological endpoints in GEOS). Buffering an empty geometry returns an empty polygon; `ST_Union_Agg` of all-empty inputs returns `NULL`; `ST_Difference(points, NULL)` propagates `NULL`; `UNNEST(ST_Dump(NULL))` throws in DuckDB-WASM.
-
-The endpoint exclusion is also conceptually unnecessary for closed rings — every vertex is an interior point of the ring, not a shared junction point. The simplification removes the `layer_03_tmp` intermediate table entirely.
-
-### Coincident seed deduplication
-
-Because `lines.ts` now includes all rings (not just exterior edges), shared interior boundaries appear once per adjacent polygon. Two polygons sharing an edge both emit interpolated points at the **same coordinates**, producing coincident seeds. GEOS handles coincident Voronoi seeds, but the doubled seed count creates degenerate near-zero-area cells along every shared boundary. Those cells then propagate into `stageMerge` — `ST_Node(ST_Collect(...))` and `ST_Polygonize` produce many more tiny pieces, and the two subsequent spatial joins become proportionally slower. On a dataset that should finish in seconds this can push runtime to minutes.
-
-Fix: `QUALIFY ROW_NUMBER() OVER (PARTITION BY ST_X(geom), ST_Y(geom) ORDER BY fid) = 1` in the `layer_03` query deduplicates coincident points, keeping the lowest fid at each location. Polygons whose boundaries are entirely shared with neighbours end up with no seeds — matching old `lines.ts` behaviour where subtracted shared edges produced no seeds — and `stageMerge`'s original-polygon assignment still covers their original territory correctly.
+| `memory_limit` | Left at default (80% of device RAM). The only override is the targeted `999GB` workaround in `voronoi.ts` described above. |
 
 ---
 
@@ -130,10 +63,10 @@ Fix: `QUALIFY ROW_NUMBER() OVER (PARTITION BY ST_X(geom), ST_Y(geom) ORDER BY fi
 | Phase | Module | Memory concern | Notes |
 | ----- | ------ | -------------- | ----- |
 | Load | `loader.ts` | Low | File buffer registered directly; no copy |
-| Lines | `lines.ts` | **Previously high** | Fixed: now O(single polygon). See above. |
-| Points | `points.ts` | Low–medium | Proportional to number of interpolated points |
-| **Voronoi** | `voronoi.ts` | **High** | `ST_VoronoiDiagram(ST_Collect(list(geom)))` materialises entire point cloud in GEOS. Retry mechanism doubles spacing until it fits. |
-| **Merge** | `merge.ts` | **High** | `ST_Node(ST_Collect(...))` has the same collect-everything pattern for all boundaries. |
-| Export | `index.ts` | Medium | `ST_AsGeoJSON` per row, then JS string concat |
+| Lines | `lines.ts` | Medium | Bbox-self-join materializes per-polygon neighbor unions (3–10 geoms each). No global aggregate. |
+| Points | `points.ts` | Low–medium | Proportional to interpolated point count. `MAX_POINTS = 10M` enforces a hard cap with retry-and-double-distance fallback. |
+| **Voronoi** | `voronoi.ts` | **High** | `ST_VoronoiDiagram(ST_Collect(list(geom)))` materialises entire point cloud in GEOS. `_04_tmp2` join uses the `999GB` override. Retry mechanism doubles spacing until it fits. |
+| **Merge** | `merge.ts` | **High** | `ST_Node(ST_Collect(...))` collects all interior + extension boundaries. The corner-snap step (`_05_tmp2`) snaps to a discrete corner set rather than nearest segment — see `merge.ts` for the rationale. Bbox-prefiltered `_05_tmp1` and `_05` joins avoid SPATIAL_JOIN. |
+| Export | `index.ts` | Medium | `ST_AsGeoJSON` per row, then JS string concat. Validation checks (overlap / gap / row count) run first; `runValidation` warnings go to console. |
 
-The retry loop in `pipeline/index.ts` (up to 10 attempts, doubling distance each time) is the safety valve for Voronoi and Merge OOMs. It only covers stages 3–4; a genuine OOM at merge (stage 5) propagates as an unrecoverable error.
+The retry loop in `pipeline/index.ts` (up to 10 attempts, doubling distance each time) is the safety valve for Points and Voronoi OOMs. It only covers stages 3–4; an OOM at lines (stage 2) or merge (stage 5) propagates as an unrecoverable error — the user is expected to fall back to the Python `edge-extender` for inputs that don't fit.

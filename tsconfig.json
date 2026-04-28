@@ -1,6 +1,8 @@
 {
   "extends": "astro/tsconfigs/strict",
-  "exclude": ["dist"],
+  "exclude": [
+    "dist"
+  ],
   "compilerOptions": {
     "allowJs": true,
     "checkJs": true,
@@ -11,5 +13,8 @@
     "sourceMap": true,
     "strict": true,
     "moduleResolution": "bundler"
-  }
+  },
+  "include": [
+    "./worker-configuration.d.ts"
+  ]
 }

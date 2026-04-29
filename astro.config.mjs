@@ -19,5 +19,11 @@ export default defineConfig({
     optimizeDeps: {
       exclude: ["@duckdb/duckdb-wasm"],
     },
+    build: {
+      // Astro's static SSR prunes scoped CSS for components that don't render
+      // at SSR time (e.g. {#if} branches). Disabling code-split keeps every
+      // component's styles in the client bundle.
+      cssCodeSplit: false,
+    },
   },
 });

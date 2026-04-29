@@ -41,7 +41,9 @@ These bbox-prefilter patterns are what make most of the pipeline WASM-safe witho
 
 The Voronoi cell-to-fid assignment uses `JOIN ... ON ST_Intersects(a.geom, b.geom)` (point × cell) and cannot use a bbox prefilter without changing semantics — generators that land exactly on a cell boundary must intersect both adjacent cells, and the bbox prefilter would still trigger `SPATIAL_JOIN` because the predicate is `ST_Intersects` rather than `ST_Within`.
 
-The mitigation: wrap the join with `SET memory_limit = '999GB'` + an RTREE index, then restore the original limit. This is the one place the WASM SPATIAL_JOIN reservation cannot be avoided structurally. It works because the joined tables are small (bounded by `MAX_POINTS = 10M` generators × roughly equal cell count) and the reservation never triggers a real allocation past the working set.
+The mitigation: wrap the join with `SET memory_limit = '999GB'` and restore the original limit afterwards. This is the one place the WASM SPATIAL_JOIN reservation cannot be avoided structurally. It works because the joined tables are small (bounded by `MAX_POINTS = 10M` generators × roughly equal cell count) and the reservation never triggers a real allocation past the working set.
+
+An earlier version also created an explicit `USING RTREE (geom)` index on `_04_tmp1` before the join. It has been removed. Edge-extender's RTREE-index experiment (`edge-extender/docs/performance.md`) measured the same `_04_tmp1` site as net-negative: SPATIAL_JOIN already builds its own internal spatial index, so the explicit RTREE was a redundant index that the planner had to weigh, plus a 0.9s build cost. Dropping it also dodges the v1.5.x "RTree indexes can only be created over GEOMETRY columns" rejection on CRS-tagged outputs from `ST_Read` (GeoPackage etc.), which removed the load-time WKB strip that had been added as a workaround.
 
 The 999GB override is **not** applied anywhere else in the pipeline. `lines.ts` (bbox self-join), `merge.ts` `_05_tmp1` (bbox-prefiltered NOT EXISTS), and `merge.ts` `_05` (bbox-prefiltered LEFT JOIN) all plan as `PIECEWISE_MERGE_JOIN` or `HASH_JOIN` and stay safely within the WASM heap.
 

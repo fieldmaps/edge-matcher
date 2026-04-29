@@ -39,6 +39,26 @@ function removeGeoMetaKey(buffer: Uint8Array): Uint8Array {
 const SINGLE_EXTS = [".parquet", ".geojson", ".geojsonl", ".gpkg", ".fgb", ".kml", ".gml", ".gpx"];
 const SHP_EXTS = [".shp", ".dbf", ".shx", ".prj", ".cpg"];
 
+// Normalized geometry expression: fid + MakeValid + Force2D + optional Transform.
+// ST_Read tags geometry with source CRS; single-arg ST_Transform infers it.
+// Parquet geometries are untagged EPSG:4326 — skip transform.
+// BLOB means WKB from a GeoParquet file whose "geo" key was stripped; parse explicitly.
+// MakeValid is applied to the source before Transform so invalid input never reaches the projection.
+function loadGeomExpr(geomType: string, quotedCol: string): string {
+  if (geomType === "BLOB") return `ST_Force2D(ST_MakeValid(ST_GeomFromWKB(${quotedCol})))`;
+  if (geomType !== "GEOMETRY")
+    return `ST_Force2D(ST_Transform(ST_MakeValid(${quotedCol}), 'EPSG:4326'))`;
+  return `ST_Force2D(ST_MakeValid(${quotedCol}))`;
+}
+
+// Bare CRS-handled expression for filter predicates — no MakeValid/Force2D so DuckDB
+// can skip them on non-matching rows.
+function rawGeomExpr(geomType: string, quotedCol: string): string {
+  if (geomType === "BLOB") return `ST_GeomFromWKB(${quotedCol})`;
+  if (geomType !== "GEOMETRY") return `ST_Transform(${quotedCol}, 'EPSG:4326')`;
+  return quotedCol;
+}
+
 function ext(name: string): string {
   const i = name.lastIndexOf(".");
   return i === -1 ? "" : name.slice(i).toLowerCase();
@@ -191,27 +211,10 @@ export async function loadFile(
     FROM raw_layer
   `);
 
-  // Geometry table: fid + normalized geom (MakeValid, Force2D, optionally Transform).
-  // ST_Read tags geometry with source CRS; single-arg ST_Transform infers it.
-  // Parquet geometries are untagged EPSG:4326 — skip transform.
-  // BLOB means WKB from a GeoParquet file whose "geo" key was stripped; parse explicitly.
-  // The final WKB round-trip strips any residual CRS tag: the pipeline
-  // (lines/points/voronoi/merge) assumes plain EPSG:4326 GEOMETRY, and on
-  // engine v1.5.x ST_VoronoiDiagram on a CRS-tagged column produces no
-  // cells (which then trips the points→cell assignment-completeness check
-  // and exhausts the retry loop).
   const quotedGeomCol = JSON.stringify(geomCol);
-  const transformed =
-    geomType === "BLOB"
-      ? `ST_GeomFromWKB(${quotedGeomCol})`
-      : geomType !== "GEOMETRY"
-        ? `ST_Transform(${quotedGeomCol}, 'EPSG:4326')`
-        : quotedGeomCol;
-  const geomExpr = `ST_Force2D(ST_MakeValid(ST_GeomFromWKB(ST_AsWKB(${transformed}))))`;
-
   await conn.query(`
     CREATE OR REPLACE TABLE layer_01 AS
-    SELECT fid, ${geomExpr} AS geom
+    SELECT fid, ${loadGeomExpr(geomType, quotedGeomCol)} AS geom
     FROM raw_layer
   `);
 
@@ -281,22 +284,10 @@ export async function loadClipFile(
 
   const { column_name: geomCol, column_type: geomType } = geomRow;
   const quotedGeomCol = JSON.stringify(geomCol);
-  // Strip CRS via WKB round-trip after any source-CRS-aware transform —
-  // see the matching comment in loadFile for the rationale.
-  const transformed =
-    geomType === "BLOB"
-      ? `ST_GeomFromWKB(${quotedGeomCol})`
-      : geomType !== "GEOMETRY"
-        ? `ST_Transform(${quotedGeomCol}, 'EPSG:4326')`
-        : quotedGeomCol;
-  const stripped = `ST_GeomFromWKB(ST_AsWKB(${transformed}))`;
-  const geomExpr = `ST_Force2D(ST_MakeValid(${stripped}))`;
 
   // Pre-filter on the raw geometry column so DuckDB skips MakeValid/Force2D/Transform
   // for non-matching rows. For a 1GB world-countries file this means those ops only run
   // on the 1-2 features that actually overlap the input layer.
-  const rawIntersects = `ST_Intersects(${stripped}, bbox.env)`;
-
   await conn.query(`
     CREATE TABLE clip_layer AS
     WITH bbox AS (
@@ -305,8 +296,8 @@ export async function loadClipFile(
         MAX(ST_XMax(geom)), MAX(ST_YMax(geom))
       ) AS env FROM layer_01
     )
-    SELECT ${geomExpr} AS geom
+    SELECT ${loadGeomExpr(geomType, quotedGeomCol)} AS geom
     FROM ${readFn}, bbox
-    WHERE ${rawIntersects}
+    WHERE ST_Intersects(${rawGeomExpr(geomType, quotedGeomCol)}, bbox.env)
   `);
 }

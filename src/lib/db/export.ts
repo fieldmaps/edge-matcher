@@ -27,30 +27,20 @@ interface DriverMeta {
   ext: string;
   mime: string;
   rank: number;
-  forceMulti?: boolean;
   layerOptions?: string[];
-  // Pass LAYER_NAME to the COPY query so the in-file layer matches the
-  // download filename. Safe for any GDAL driver that exposes a layer/
-  // document name (GPKG, KML, GML).
-  setLayerName?: boolean;
-  // Route the COPY destination through OPFS (opfs://...) instead of the
-  // in-memory BUFFER filesystem. Required for drivers whose writers need
-  // real seek-write file semantics. Only works because duckdb-wasm is
-  // opened with an opfs:// DB path (see duckdb.svelte.ts) — that flips on
-  // shouldOPFSFileHandling() which makes the runtime auto-manage the
-  // lifecycle of any 'opfs://...' literal in a query, including SQLite's
-  // journal-file unlink at commit.
-  opfsBacked?: boolean;
 }
 
 // Curated set of GDAL output drivers under DuckDB-WASM's spatial extension.
 // All GDAL drivers route their output through OPFS via a registered
-// FileSystemFileHandle (see `opfsBacked` branch in exportGdal). The
-// alternative — letting COPY TO write to a plain BUFFER path — appeared
-// to "work" but actually produced 1-byte placeholder files because
-// GDAL's VSI write layer doesn't compose with duckdb-wasm's BUFFER
-// filesystem. Native Parquet COPY (`FORMAT PARQUET`) is the only writer
-// that works through BUFFER; it has its own non-GDAL code path.
+// FileSystemFileHandle (see exportGdal). The alternative — letting COPY TO
+// write to a plain BUFFER path — appeared to "work" but actually produced
+// 1-byte placeholder files because GDAL's VSI write layer doesn't compose
+// with duckdb-wasm's BUFFER filesystem. The OPFS path needs a duckdb-wasm
+// session opened on an opfs:// DB (see duckdb.svelte.ts), which flips on
+// shouldOPFSFileHandling() so registerFileHandle wires the OPFS handle into
+// the runtime's filesystem layer with real seek-write semantics. Native
+// Parquet COPY (`FORMAT PARQUET`) is the only writer that works through
+// BUFFER; it has its own non-GDAL code path.
 // ESRI Shapefile is delivered as a .zip: each companion (.shp/.shx/
 // .dbf/.prj/.cpg) gets its own registered OPFS handle, then fflate
 // bundles the results client-side. /vsizip/ would be cleaner but
@@ -64,26 +54,20 @@ interface DriverMeta {
 // KML and LIBKML both produce the same .kml output; we surface whichever
 // the loaded build provides.
 const KNOWN_DRIVERS: Record<string, DriverMeta> = {
-  "ESRI Shapefile": {
-    label: "Shapefile (.shp.zip)",
-    ext: ".shp.zip",
-    mime: "application/zip",
-    rank: 10,
-    forceMulti: true,
-    setLayerName: true,
-    opfsBacked: true,
-    // ENCODING=UTF-8 makes GDAL write the .cpg sidecar declaring UTF-8 and
-    // ensures non-ASCII attribute values round-trip through the .dbf.
-    layerOptions: ["ENCODING=UTF-8"],
-  },
   GPKG: {
     label: "GeoPackage (.gpkg)",
     ext: ".gpkg",
     mime: "application/geopackage+sqlite3",
     rank: 20,
-    forceMulti: true,
-    setLayerName: true,
-    opfsBacked: true,
+  },
+  "ESRI Shapefile": {
+    label: "Shapefile (.shp.zip)",
+    ext: ".shp.zip",
+    mime: "application/zip",
+    rank: 30,
+    // ENCODING=UTF-8 makes GDAL write the .cpg sidecar declaring UTF-8 and
+    // ensures non-ASCII attribute values round-trip through the .dbf.
+    layerOptions: ["ENCODING=UTF-8"],
   },
   // FGB writes a spatial index by default; the back-patched header needs
   // random-write semantics, same precedent as Shapefile.
@@ -91,10 +75,7 @@ const KNOWN_DRIVERS: Record<string, DriverMeta> = {
     label: "FlatGeobuf (.fgb)",
     ext: ".fgb",
     mime: "application/vnd.flatgeobuf",
-    rank: 35,
-    forceMulti: true,
-    setLayerName: true,
-    opfsBacked: true,
+    rank: 40,
   },
   // LIBKML is preferred over KML when the build provides it: the older KML
   // driver writes a minimal <Style> with only <LineStyle>, which QGIS honours
@@ -105,28 +86,19 @@ const KNOWN_DRIVERS: Record<string, DriverMeta> = {
     label: "KML (.kml)",
     ext: ".kml",
     mime: "application/vnd.google-earth.kml+xml",
-    rank: 40,
-    forceMulti: true,
-    setLayerName: true,
-    opfsBacked: true,
+    rank: 50,
   },
   KML: {
     label: "KML (.kml)",
     ext: ".kml",
     mime: "application/vnd.google-earth.kml+xml",
-    rank: 40,
-    forceMulti: true,
-    setLayerName: true,
-    opfsBacked: true,
+    rank: 50,
   },
   GML: {
     label: "GML (.gml)",
     ext: ".gml",
     mime: "application/gml+xml",
-    rank: 70,
-    forceMulti: true,
-    setLayerName: true,
-    opfsBacked: true,
+    rank: 60,
   },
 };
 
@@ -189,7 +161,7 @@ async function discoverFormats(): Promise<ExportFormat[]> {
     ext: ".parquet",
     mime: "application/vnd.apache.parquet",
     kind: "parquet",
-    rank: 30,
+    rank: 10,
   });
 
   formats.sort((a, b) => {
@@ -313,8 +285,7 @@ async function exportGdal(
   const { db, conn } = requireDb();
   const { table, suffix } = SOURCES[source];
   const meta = format.driver ? KNOWN_DRIVERS[format.driver] : undefined;
-  const geomExpr = meta?.forceMulti ? "ST_Multi(a.geom) AS geom" : "a.geom AS geom";
-  const select = await buildJoinSelect(conn, table, geomExpr);
+  const select = await buildJoinSelect(conn, table, "ST_Multi(a.geom) AS geom");
 
   const layerOptionsClause =
     meta?.layerOptions && meta.layerOptions.length > 0
@@ -322,9 +293,7 @@ async function exportGdal(
       : "";
 
   const layerName = `${stem}${suffix}`;
-  const layerNameClause = meta?.setLayerName
-    ? `, LAYER_NAME ${quotePath(layerName)}`
-    : "";
+  const layerNameClause = `, LAYER_NAME ${quotePath(layerName)}`;
   // The pipeline transforms input geometries to EPSG:4326 (loader.ts) and
   // the DB session sets geometry_always_xy=true, so all output GDAL drivers
   // should declare WGS84 explicitly. Without this, GDAL writes no CRS info
@@ -333,96 +302,73 @@ async function exportGdal(
   const srsClause = `, SRS 'EPSG:4326'`;
   const filename = `${layerName}${format.ext}`;
 
-  if (meta?.opfsBacked) {
-    const root = await navigator.storage.getDirectory();
-    const baseName = `__edge_export_${exportId()}`;
+  const root = await navigator.storage.getDirectory();
+  const baseName = `__edge_export_${exportId()}`;
 
-    if (format.driver === "ESRI Shapefile") {
-      // Shapefile is multi-file. Pre-register OPFS handles for each
-      // companion (.shp/.shx/.dbf/.prj/.cpg) so GDAL can write through
-      // them, then bundle the results with fflate. /vsizip/ would be
-      // cleaner but rejects the random-write pattern Shapefile uses.
-      const exts = [".shp", ".shx", ".dbf", ".prj", ".cpg"];
-      const companions: Array<{ ext: string; name: string; handle: FileSystemFileHandle }> = [];
-      for (const ext of exts) {
-        const fname = `${baseName}${ext}`;
-        const handle = await root.getFileHandle(fname, { create: true });
-        await db.registerFileHandle(
-          fname,
-          handle,
-          DuckDBDataProtocol.BROWSER_FSACCESS,
-          true,
-        );
-        companions.push({ ext, name: fname, handle });
-      }
-      try {
-        await conn.query(
-          `COPY (${select}) TO ${quotePath(`${baseName}.shp`)} WITH (FORMAT GDAL, DRIVER 'ESRI Shapefile'${srsClause}${layerNameClause}${layerOptionsClause})`,
-        );
-        const filesToZip: Record<string, Uint8Array> = {};
-        for (const c of companions) {
-          const file = await c.handle.getFile();
-          const bytes = new Uint8Array(await file.arrayBuffer());
-          if (bytes.length > 0) {
-            filesToZip[`${layerName}${c.ext}`] = bytes;
-          }
-        }
-        if (!filesToZip[`${layerName}.shp`]) {
-          throw new Error("Shapefile export produced no .shp output");
-        }
-        const zipped = await new Promise<Uint8Array>((resolve, reject) => {
-          fflateZip(filesToZip, (err, data) => (err ? reject(err) : resolve(data)));
-        });
-        return { blob: toBlob(zipped, format.mime), filename };
-      } finally {
-        for (const c of companions) {
-          await dropFileSafe(db, c.name);
-          try {
-            await root.removeEntry(c.name);
-          } catch {
-            // not present — fine
-          }
-        }
-      }
+  if (format.driver === "ESRI Shapefile") {
+    // Shapefile is multi-file. Pre-register OPFS handles for each
+    // companion (.shp/.shx/.dbf/.prj/.cpg) so GDAL can write through
+    // them, then bundle the results with fflate. /vsizip/ would be
+    // cleaner but rejects the random-write pattern Shapefile uses.
+    const exts = [".shp", ".shx", ".dbf", ".prj", ".cpg"];
+    const companions: Array<{ ext: string; name: string; handle: FileSystemFileHandle }> = [];
+    for (const ext of exts) {
+      const fname = `${baseName}${ext}`;
+      const handle = await root.getFileHandle(fname, { create: true });
+      await db.registerFileHandle(fname, handle, DuckDBDataProtocol.BROWSER_FSACCESS, true);
+      companions.push({ ext, name: fname, handle });
     }
-
-    // Single-file OPFS branch (GPKG, KML, LIBKML, GML).
-    // Bypass the runtime's auto-OPFS path scanning (which opens an exclusive
-    // SyncAccessHandle on opfs:// paths and conflicts with SQLite's own open
-    // call inside GDAL's GPKG driver, surfacing as "file is in use"). Instead
-    // we acquire the OPFS FileSystemFileHandle ourselves and register it via
-    // registerFileHandle with a plain name; the auto-OPFS regex only matches
-    // single-quoted opfs:// literals so this name is invisible to it. After
-    // COPY, we read the bytes back through the same FileSystemFileHandle.
-    const name = `${baseName}${format.ext}`;
-    const fileHandle = await root.getFileHandle(name, { create: true });
-    await db.registerFileHandle(
-      name,
-      fileHandle,
-      DuckDBDataProtocol.BROWSER_FSACCESS,
-      true,
-    );
     try {
       await conn.query(
-        `COPY (${select}) TO ${quotePath(name)} WITH (FORMAT GDAL, DRIVER ${quotePath(format.driver!)}${srsClause}${layerNameClause}${layerOptionsClause})`,
+        `COPY (${select}) TO ${quotePath(`${baseName}.shp`)} WITH (FORMAT GDAL, DRIVER 'ESRI Shapefile'${srsClause}${layerNameClause}${layerOptionsClause})`,
       );
-      const bytes = await readOpfsFileBytes(fileHandle);
-      return { blob: toBlob(bytes, format.mime), filename };
+      const filesToZip: Record<string, Uint8Array> = {};
+      for (const c of companions) {
+        const file = await c.handle.getFile();
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (bytes.length > 0) {
+          filesToZip[`${layerName}${c.ext}`] = bytes;
+        }
+      }
+      if (!filesToZip[`${layerName}.shp`]) {
+        throw new Error("Shapefile export produced no .shp output");
+      }
+      const zipped = await new Promise<Uint8Array>((resolve, reject) => {
+        fflateZip(filesToZip, (err, data) => (err ? reject(err) : resolve(data)));
+      });
+      return { blob: toBlob(zipped, format.mime), filename };
     } finally {
-      await dropFileSafe(db, name);
-      await removeOpfsEntries(name);
+      for (const c of companions) {
+        await dropFileSafe(db, c.name);
+        try {
+          await root.removeEntry(c.name);
+        } catch {
+          // not present — fine
+        }
+      }
     }
   }
 
-  const path = vfsName(format.ext);
+  // Single-file OPFS branch (GPKG, FlatGeobuf, KML, LIBKML, GML).
+  // Bypass the runtime's auto-OPFS path scanning (which opens an exclusive
+  // SyncAccessHandle on opfs:// paths and conflicts with SQLite's own open
+  // call inside GDAL's GPKG driver, surfacing as "file is in use"). Instead
+  // we acquire the OPFS FileSystemFileHandle ourselves and register it via
+  // registerFileHandle with a plain name; the auto-OPFS regex only matches
+  // single-quoted opfs:// literals so this name is invisible to it. After
+  // COPY, we read the bytes back through the same FileSystemFileHandle.
+  const name = `${baseName}${format.ext}`;
+  const fileHandle = await root.getFileHandle(name, { create: true });
+  await db.registerFileHandle(name, fileHandle, DuckDBDataProtocol.BROWSER_FSACCESS, true);
   try {
     await conn.query(
-      `COPY (${select}) TO ${quotePath(path)} WITH (FORMAT GDAL, DRIVER ${quotePath(format.driver!)}${srsClause}${layerNameClause}${layerOptionsClause})`,
+      `COPY (${select}) TO ${quotePath(name)} WITH (FORMAT GDAL, DRIVER ${quotePath(format.driver!)}${srsClause}${layerNameClause}${layerOptionsClause})`,
     );
-    const bytes = await db.copyFileToBuffer(path);
+    const bytes = await readOpfsFileBytes(fileHandle);
     return { blob: toBlob(bytes, format.mime), filename };
   } finally {
-    await dropFileSafe(db, path);
+    await dropFileSafe(db, name);
+    await removeOpfsEntries(name);
   }
 }
 

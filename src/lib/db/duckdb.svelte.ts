@@ -5,9 +5,13 @@ class DuckDBState {
   conn: duckdb.AsyncDuckDBConnection | null = null;
   ready = $state(false);
   initError = $state<string | null>(null);
-  // OPFS-backed DB filename for this tab session. Set during init and used by
-  // the beforeunload handler to remove the file on clean tab close.
+  // OPFS-backed DB filenames for this tab session. The primary DB is opened
+  // at opfs:// to enable shouldOPFSFileHandling() (needed by the GPKG export
+  // path); it stays empty. The data DB is ATTACHed with STORAGE_VERSION
+  // v1.5.0 so CRS-tagged GEOMETRY columns from ST_Read can be persisted.
+  // Both names are tracked here so beforeunload can clean them up.
   sessionDbName: string | null = null;
+  sessionDataDbName: string | null = null;
 }
 
 export const duckdbState = new DuckDBState();
@@ -42,6 +46,10 @@ export async function initDuckDB(): Promise<void> {
     // any 'opfs://...' literal that appears in a query and unregisters it
     // afterwards — required to make the GPKG export driver's SQLite work,
     // since SQLite needs the runtime to manage journal-file lifecycle for it.
+    // The primary DB is opened on opfs:// solely to flip that switch on; we
+    // never write tables to it, because instance.open() doesn't accept a
+    // storage-version option, so its file is stuck at the default v1.0.0+,
+    // which can't store CRS-tagged GEOMETRY columns produced by ST_Read.
     duckdbState.sessionDbName = makeSessionDbName();
     await instance.open({
       path: `opfs://${duckdbState.sessionDbName}`,
@@ -52,6 +60,26 @@ export async function initDuckDB(): Promise<void> {
     duckdbState.db = instance;
     const conn = await instance.connect();
     duckdbState.conn = conn;
+
+    // Data DB: ATTACH a second OPFS file with STORAGE_VERSION 'v1.5.0' so
+    // CRS-tagged GEOMETRY columns persist correctly. We pre-register the
+    // empty file under a plain name (no opfs:// prefix) and ATTACH that
+    // name; the runtime's auto-OPFS regex only matches single-quoted
+    // 'opfs://' literals, so the registered handle is invisible to its
+    // post-query dropFiles() pass and stays alive for the session.
+    duckdbState.sessionDataDbName = makeSessionDbName();
+    const root = await navigator.storage.getDirectory();
+    const dataHandle = await root.getFileHandle(duckdbState.sessionDataDbName, { create: true });
+    await instance.registerFileHandle(
+      duckdbState.sessionDataDbName,
+      dataHandle,
+      duckdb.DuckDBDataProtocol.BROWSER_FSACCESS,
+      true,
+    );
+    await conn.query(
+      `ATTACH '${duckdbState.sessionDataDbName.replace(/'/g, "''")}' AS edge (STORAGE_VERSION 'v1.5.0')`,
+    );
+    await conn.query("USE edge");
 
     await conn.query("SET threads = 1");
     await conn.query("SET preserve_insertion_order = false");
@@ -69,13 +97,17 @@ export async function initDuckDB(): Promise<void> {
 
     if (typeof window !== "undefined") {
       window.addEventListener("beforeunload", () => {
-        // Best-effort cleanup of the OPFS-backed DB file on clean tab close.
+        // Best-effort cleanup of both OPFS-backed DB files on clean tab close.
         // Fire-and-forget — beforeunload doesn't await async work.
-        const name = duckdbState.sessionDbName;
-        if (!name) return;
+        const names = [duckdbState.sessionDbName, duckdbState.sessionDataDbName].filter(
+          (n): n is string => typeof n === "string",
+        );
+        if (names.length === 0) return;
         navigator.storage
           ?.getDirectory()
-          .then((root) => root.removeEntry(name))
+          .then((root) =>
+            Promise.allSettled(names.map((name) => root.removeEntry(name))).then(() => undefined),
+          )
           .catch(() => {});
       });
     }

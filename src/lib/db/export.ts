@@ -58,8 +58,6 @@ interface DriverMeta {
 // header back-patching needs random-write semantics that the VSI
 // handler doesn't provide.
 // Excluded:
-//   - FlatGeobuf: deferred. BUFFER attempt failed with "Unexpected I/O
-//     failure: writing feature" mid-stream; OPFS path unverified.
 //   - GeoJSON: covered by the primary download button which serves the
 //     already-cached string. Listing it here would duplicate that entry.
 //   - GPX: GDAL only writes waypoint/track/route schemas, not polygons.
@@ -83,6 +81,17 @@ const KNOWN_DRIVERS: Record<string, DriverMeta> = {
     ext: ".gpkg",
     mime: "application/geopackage+sqlite3",
     rank: 20,
+    forceMulti: true,
+    setLayerName: true,
+    opfsBacked: true,
+  },
+  // FGB writes a spatial index by default; the back-patched header needs
+  // random-write semantics, same precedent as Shapefile.
+  FlatGeobuf: {
+    label: "FlatGeobuf (.fgb)",
+    ext: ".fgb",
+    mime: "application/vnd.flatgeobuf",
+    rank: 35,
     forceMulti: true,
     setLayerName: true,
     opfsBacked: true,

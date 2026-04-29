@@ -29,26 +29,31 @@ interface DriverMeta {
   layerOptions?: string[];
 }
 
-// Curated set: confirmed-working GDAL output drivers under DuckDB-WASM's
-// spatial extension as of 2026-04-29. Only streaming-text writers (KML,
-// LIBKML, GML) are reliable through `COPY ... TO ... WITH (FORMAT GDAL,
-// DRIVER ...)`. Binary writers were attempted and excluded:
-//   - ESRI Shapefile: "Failed to write .shp header" — multi-file companion
-//     output through the WASM filesystem fails before any data is written.
-//   - GeoPackage (GPKG): "file is not a database" — DuckDB's COPY
-//     pre-creates a 0-byte destination file, then GDAL hands the path to
-//     SQLite, which refuses to open existing-but-empty files. The error
-//     surfaces at the very first PRAGMA, before any GDAL layer code runs;
-//     LAYER_CREATION_OPTIONS like SPATIAL_INDEX=NO do nothing. Fixing this
-//     would require routing the path through OPFS or /vsimem/ rather than
-//     duckdb-wasm's BUFFER filesystem — a separate investigation.
-//   - FlatGeobuf (FGB): with SPATIAL_INDEX=NO the header writes succeed
-//     but `CreateFeature` fails mid-stream with "Unexpected I/O failure:
-//     writing feature" (GDAL reporting `sz != written` from VSIFWriteL).
-//     Looks like a partial-write / buffer-growth failure in the WASM
-//     BUFFER filesystem rather than something a GDAL option can fix.
+// Curated set of GDAL output drivers under DuckDB-WASM's spatial extension.
+// Only streaming-text writers (KML, LIBKML, GML) and native Parquet are
+// reliable. The binary GDAL writers we tried fail at the WASM filesystem
+// boundary and are excluded:
+//   - ESRI Shapefile → "Failed to write .shp header". Multi-file companion
+//     output (.shp/.shx/.dbf/.prj/.cpg) needs atomic creation across five
+//     paths; neither the in-memory BUFFER filesystem nor OPFS supports it.
+//   - GeoPackage (GPKG) → SQLite-backed; needs real seek-write file
+//     semantics. We tried routing through OPFS (db.open with manual
+//     fileHandling, registerOPFSFileName for the path + -journal/-wal/-shm
+//     siblings). That cleared the initial "file is not a database" error
+//     and got far enough to create and populate the GPKG metadata tables,
+//     but COMMIT then failed with "disk I/O error" — SQLite's default
+//     journal_mode is DELETE, which calls unlink() on the journal file at
+//     commit, and the registered duckdb-wasm OPFS handle blocks unlink.
+//     Fixing it properly needs either an OPFS-backed DB session
+//     (db.open({ path: "opfs://..." }) — only mode where auto file-handling
+//     fires per shouldOPFSFileHandling() in the runtime), or a way to
+//     inject `PRAGMA journal_mode = MEMORY/PERSIST` before the GPKG driver
+//     starts its transactions. Neither is reachable from where we sit.
+//   - FlatGeobuf (FGB) → "Unexpected I/O failure: writing feature" mid-
+//     stream in BUFFER mode (`sz != written` from VSIFWriteL); the OPFS
+//     route inherits the GPKG infrastructure problem and is unverified.
 // Also excluded:
-//   - GeoJSON: covered by the cached entry.
+//   - GeoJSON: covered by the cached-string entry pinned at rank 0.
 //   - GPX: GDAL only writes waypoint/track/route schemas, not polygons.
 // KML and LIBKML both produce the same .kml output; we surface whichever
 // the loaded build provides.
@@ -116,9 +121,7 @@ async function discoverFormats(): Promise<ExportFormat[]> {
   // extension actually supports. A future build that drops a driver simply
   // hides the corresponding menu entry; nothing surfaces beyond the curated
   // list.
-  const drivers = await conn.query(
-    "SELECT short_name FROM ST_Drivers() WHERE can_create",
-  );
+  const drivers = await conn.query("SELECT short_name FROM ST_Drivers() WHERE can_create");
   const available = new Set(
     (drivers.toArray() as Array<{ short_name: string }>).map((r) => r.short_name),
   );
@@ -254,10 +257,6 @@ async function exportGdal(
       ? `, LAYER_CREATION_OPTIONS (${meta.layerOptions.map(quotePath).join(", ")})`
       : "";
 
-  // Don't pre-register: GDAL's GPKG driver opens the destination as a SQLite
-  // database, and a pre-registered 0-byte buffer reads as "file is not a
-  // database". Letting COPY TO create the file fresh through the VFS works
-  // for SQLite-backed and plain-binary drivers alike.
   const path = vfsName(format.ext);
   try {
     await conn.query(

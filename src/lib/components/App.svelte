@@ -4,6 +4,7 @@
   import { runClip } from "$lib/pipeline/clip";
   import { getOriginalGeojson, PipelineError, runPipeline } from "$lib/pipeline/index";
   import { onMount, untrack } from "svelte";
+  import DownloadMenu from "./DownloadMenu.svelte";
   import DropZone from "./DropZone.svelte";
   import MapView from "./MapView.svelte";
 
@@ -127,17 +128,6 @@
     return file.name.replace(/\.[^.]+$/, "");
   }
 
-  function download() {
-    if (!resultGeoJSON) return;
-    const blob = new Blob([resultGeoJSON], { type: "application/geo+json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${fileStem(files[0])}_ee.geojson`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
   async function handleClip() {
     clearClip?.();
     clipError = null;
@@ -158,16 +148,6 @@
     }
   }
 
-  function downloadClip() {
-    if (!clipGeoJSON) return;
-    const blob = new Blob([clipGeoJSON], { type: "application/geo+json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${fileStem(clipFiles[0])}_em.geojson`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
 </script>
 
 <div class="layout">
@@ -239,7 +219,12 @@
       {/if}
 
       {#if resultGeoJSON}
-        <button class="download-btn" onclick={download}>Download GeoJSON</button>
+        <DownloadMenu
+          primaryLabel="Download GeoJSON"
+          filenameStem={fileStem(files[0])}
+          cachedGeoJSON={resultGeoJSON}
+          exportSource="extend"
+        />
       {/if}
     </section>
 
@@ -262,7 +247,12 @@
         <div class="error-panel">{clipError}</div>
       {/if}
       {#if clipGeoJSON}
-        <button class="download-btn" onclick={downloadClip}>Download GeoJSON (matched)</button>
+        <DownloadMenu
+          primaryLabel="Download GeoJSON (matched)"
+          filenameStem={fileStem(clipFiles[0])}
+          cachedGeoJSON={clipGeoJSON}
+          exportSource="clip"
+        />
       {/if}
     </section>
 
@@ -468,22 +458,6 @@
     font-size: 0.825rem;
     color: #b91c1c;
     word-break: break-word;
-  }
-
-  .download-btn {
-    background: #1d4ed8;
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    padding: 0.6rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    width: 100%;
-  }
-
-  .download-btn:hover {
-    background: #1e40af;
   }
 
   .privacy {

@@ -99,18 +99,11 @@ async function discoverFormats(): Promise<ExportFormat[]> {
   const conn = duckdbState.conn;
   if (!conn) throw new Error("DuckDB is not ready yet.");
 
-  const formats: ExportFormat[] = [
-    {
-      id: "geojson_cached",
-      label: "GeoJSON (.geojson)",
-      ext: ".geojson",
-      mime: "application/geo+json",
-      kind: "geojson_cached",
-      rank: 0,
-    },
-  ];
+  // GeoJSON is intentionally omitted: the primary download button already
+  // serves the cached GeoJSON, so listing it here would duplicate that entry.
+  const formats: ExportFormat[] = [];
 
-  const seenLabels = new Set<string>([formats[0].label]);
+  const seenLabels = new Set<string>();
   const pushUnique = (f: ExportFormat) => {
     if (seenLabels.has(f.label)) return;
     seenLabels.add(f.label);

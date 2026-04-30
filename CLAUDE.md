@@ -1,6 +1,18 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Verification Over Recall
+
+- Never rely on remembered knowledge for libraries, APIs, or frameworks —
+  check installed versions and docs before writing code or making claims
+- If you lack verified information, acknowledge uncertainty and investigate
+  first rather than speculate
+
+## Collaboration Style
+
+- Be objective, not agreeable — act as a partner, not a sycophant
+- Push back when you disagree, flag tradeoffs honestly, don't sugarcoat problems
+- Keep explanations brief and to the point
+- Accuracy over speed
 
 ## Commands
 

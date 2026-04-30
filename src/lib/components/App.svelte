@@ -92,10 +92,15 @@
       }
       originalGeoJSON = origGeoJSON;
 
-      const result = await runPipeline(duckdbState.conn!, distance, (stage, label) => {
-        currentStage = stage;
-        stageLabel = label;
-      });
+      const result = await runPipeline(
+        duckdbState.db!,
+        duckdbState.conn!,
+        distance,
+        (stage, label) => {
+          currentStage = stage;
+          stageLabel = label;
+        },
+      );
 
       resultGeoJSON = result.geojson;
       resultBounds = result.bounds ?? resultBounds;
@@ -157,8 +162,8 @@
       <p class="blurb">
         Extend polygon boundaries outward to meet a parent boundary — for example ADM3 sub-national
         areas that fall short of their ADM0 country edge. Drop a polygon layer; the tool extends
-        each polygon's edges outward via a Voronoi diagram. Note: input polygons must already be a
-        clean coverage (no internal gaps or overlaps).
+        each polygon's edges outward via a Voronoi diagram. Internal gaps or overlaps are detected
+        and cleaned automatically before processing.
       </p>
     </header>
 

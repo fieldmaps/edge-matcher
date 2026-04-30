@@ -32,7 +32,11 @@
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.33.1-dev53.0",
+    "buffer": "^6.0.3",
     "fflate": "^0.8.2",
-    "maplibre-gl": "^5.24.0"
+    "flatbush": "^4.5.1",
+    "maplibre-gl": "^5.24.0",
+    "mapshaper": "^0.7.6",
+    "mproj": "^0.0.40"
   }
 }

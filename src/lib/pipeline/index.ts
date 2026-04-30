@@ -1,4 +1,5 @@
-import type { AsyncDuckDBConnection } from "@duckdb/duckdb-wasm";
+import type { AsyncDuckDB, AsyncDuckDBConnection } from "@duckdb/duckdb-wasm";
+import { stageClean } from "./clean";
 import { stageLines } from "./lines";
 import { stageMerge } from "./merge";
 import { stagePoints } from "./points";
@@ -78,10 +79,16 @@ async function runValidation(
 }
 
 export async function runPipeline(
+  db: AsyncDuckDB,
   conn: AsyncDuckDBConnection,
   distance: number,
   onProgress: ProgressFn,
 ): Promise<PipelineResult> {
+  // Optional pre-stage: detect overlaps/gaps and run mapshaper -clean in a
+  // Worker if needed. Reported under stage 1 (Load) so clean inputs show
+  // no extra step. See pipeline/clean.ts for the detection thresholds.
+  await stageClean(db, conn, (label) => onProgress(1, label));
+
   // Stage 2: lines (single attempt; _02a/_02b are stable across retries)
   onProgress(2, "Extracting boundary lines");
   await stageLines(conn);

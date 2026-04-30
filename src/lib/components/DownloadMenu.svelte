@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    gdalGeoJSONFormat,
     listFormats,
     runExport,
     type ExportFormat,
@@ -13,12 +14,14 @@
     cachedGeoJSON,
     exportSource,
     disabled = false,
+    excludeFormatIds = [],
   }: {
     primaryLabel: string;
     filenameStem: string;
-    cachedGeoJSON: string;
+    cachedGeoJSON?: string;
     exportSource: ExportSource;
     disabled?: boolean;
+    excludeFormatIds?: string[];
   } = $props();
 
   let rootEl: HTMLDivElement | undefined = $state();
@@ -30,6 +33,10 @@
   let formats = $state<ExportFormat[] | null>(null);
   let formatsError = $state<string | null>(null);
   let loadingFormats = $state(false);
+
+  const visibleFormats = $derived(
+    formats ? formats.filter((f) => !excludeFormatIds.includes(f.id)) : null,
+  );
 
   const cachedGeoJSONFormat: ExportFormat = {
     id: "geojson_cached",
@@ -75,16 +82,18 @@
 
   async function handlePrimary() {
     error = null;
+    busy = true;
     try {
-      const r = await runExport(
-        exportSource,
-        cachedGeoJSONFormat,
-        filenameStem,
-        cachedGeoJSON,
-      );
+      // No cached string → route GeoJSON through GDAL so output streams via
+      // OPFS instead of materializing a giant JS string. Necessary when the
+      // pipeline already OOM'd; building the string here would re-trigger it.
+      const fmt = cachedGeoJSON ? cachedGeoJSONFormat : gdalGeoJSONFormat;
+      const r = await runExport(exportSource, fmt, filenameStem, cachedGeoJSON);
       triggerDownload(r);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -167,8 +176,8 @@
         <li class="dl-info" role="none">Loading formats…</li>
       {:else if formatsError}
         <li class="dl-error" role="none">{formatsError}</li>
-      {:else if formats}
-        {#each formats as f (f.id)}
+      {:else if visibleFormats}
+        {#each visibleFormats as f (f.id)}
           <li role="none">
             <button
               type="button"

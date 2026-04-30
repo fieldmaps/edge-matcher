@@ -3,7 +3,7 @@ import { DuckDBDataProtocol } from "@duckdb/duckdb-wasm";
 import { zip as fflateZip } from "fflate";
 import { duckdbState } from "./duckdb.svelte";
 
-export type ExportSource = "extend" | "clip";
+export type ExportSource = "extend" | "clip" | "clean";
 
 export type ExportKind = "geojson_cached" | "gdal" | "parquet";
 
@@ -105,6 +105,21 @@ const KNOWN_DRIVERS: Record<string, DriverMeta> = {
 const SOURCES: Record<ExportSource, { table: string; suffix: string }> = {
   extend: { table: "layer_05", suffix: "_ee" },
   clip: { table: "layer_clip", suffix: "_em" },
+  clean: { table: "layer_01", suffix: "_cleaned" },
+};
+
+// GDAL-driven GeoJSON. Used as the primary-button format when DownloadMenu
+// has no cached GeoJSON string available (i.e. the cleaned-input fallback
+// after a pipeline OOM, where building a JS string would re-trigger the
+// heap exhaustion). GDAL streams output through OPFS instead.
+export const gdalGeoJSONFormat: ExportFormat = {
+  id: "gdal:GeoJSON",
+  label: "GeoJSON (.geojson)",
+  ext: ".geojson",
+  mime: "application/geo+json",
+  kind: "gdal",
+  driver: "GeoJSON",
+  rank: 5,
 };
 
 let cachedFormats: Promise<ExportFormat[]> | null = null;

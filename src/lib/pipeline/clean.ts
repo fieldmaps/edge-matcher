@@ -106,10 +106,10 @@ export async function stageClean(
   db: AsyncDuckDB,
   conn: AsyncDuckDBConnection,
   onLabel: CleanProgress,
-): Promise<void> {
+): Promise<boolean> {
   onLabel("Checking coverage validity…");
   const { dirty, reason } = await detectDirty(conn);
-  if (!dirty) return;
+  if (!dirty) return false;
 
   onLabel(`Cleaning coverage (${reason})…`);
   const inputBytes = await exportLayerToGeoJSONBytes(conn);
@@ -133,4 +133,5 @@ export async function stageClean(
       // best-effort
     }
   }
+  return true;
 }

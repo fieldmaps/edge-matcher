@@ -24,6 +24,7 @@
   let stageLabel = $state("");
   let resultGeoJSON = $state<string | null>(null);
   let originalGeoJSON = $state<string | null>(null);
+  let cleanRan = $state(false);
   let resultBounds = $state<[number, number, number, number] | null>(null);
   let error = $state<string | null>(null);
 
@@ -64,6 +65,7 @@
     running = true;
     resultGeoJSON = null;
     originalGeoJSON = null;
+    cleanRan = false;
     resultBounds = null;
     currentStage = 0;
     errorStage = 0;
@@ -100,6 +102,9 @@
           currentStage = stage;
           stageLabel = label;
         },
+        (ran) => {
+          cleanRan = ran;
+        },
       );
 
       resultGeoJSON = result.geojson;
@@ -110,6 +115,9 @@
       error = e instanceof Error ? e.message : String(e);
       errorStage = e instanceof PipelineError ? (e as PipelineError).failedStage : currentStage;
       currentStage = 0;
+      // cleanRan stays as set by the runPipeline callback. If true, the
+      // template renders a DownloadMenu that pulls from layer_01 via GDAL
+      // on click — no JS-side string materialization (would re-OOM).
     } finally {
       running = false;
     }
@@ -221,6 +229,19 @@
 
       {#if error}
         <div class="error-panel">{error}</div>
+      {/if}
+
+      {#if !resultGeoJSON && cleanRan && !running}
+        <p class="cleaned-note">
+          Topology cleanup succeeded, but extending the boundaries failed. You can still download
+          the cleaned input.
+        </p>
+        <DownloadMenu
+          primaryLabel="Download cleaned input"
+          filenameStem={fileStem(files[0])}
+          exportSource="clean"
+          excludeFormatIds={["gdal:GPKG", "parquet"]}
+        />
       {/if}
 
       {#if resultGeoJSON}
@@ -484,5 +505,12 @@
     font-size: 0.825rem;
     color: #6b7280;
     margin: 0;
+  }
+
+  .cleaned-note {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin: 0;
+    line-height: 1.4;
   }
 </style>

@@ -20,7 +20,7 @@
   let distance = $state(0.0002);
   let running = $state(false);
   let currentStage = $state(0); // 0=idle, 1-5=active stage, 6=done
-  let errorStage = $state(0);   // stage number that failed, 0=none
+  let errorStage = $state(0); // stage number that failed, 0=none
   let stageLabel = $state("");
   let resultGeoJSON = $state<string | null>(null);
   let originalGeoJSON = $state<string | null>(null);
@@ -147,7 +147,6 @@
       clipStageLabel = "";
     }
   }
-
 </script>
 
 <div class="layout">
@@ -156,9 +155,10 @@
       <h1>Edge Matcher</h1>
       <p class="tagline">Edge Extender + clip — fully in your browser.</p>
       <p class="blurb">
-        Fix gaps and overlaps where adjacent polygon boundaries don't line up — for example ADM3
-        sub-national areas that don't match their ADM0 country edge. Drop a polygon layer; the tool
-        extends each polygon's edges outward via a Voronoi diagram so they meet cleanly.
+        Extend polygon boundaries outward to meet a parent boundary — for example ADM3 sub-national
+        areas that fall short of their ADM0 country edge. Drop a polygon layer; the tool extends
+        each polygon's edges outward via a Voronoi diagram. Note: input polygons must already be a
+        clean coverage (no internal gaps or overlaps).
       </p>
     </header>
 
@@ -229,7 +229,9 @@
     </section>
 
     <section class="step">
-      <h2 class="step-heading">Step 2 — Clip to a known boundary <span class="optional">(optional)</span></h2>
+      <h2 class="step-heading">
+        Step 2 — Clip to a known boundary <span class="optional">(optional)</span>
+      </h2>
       <p class="step-blurb">
         Trim the extended result to a boundary you trust (e.g. an official ADM0) to remove ocean
         overshoot.
@@ -376,6 +378,7 @@
     font-size: 0.875rem;
     width: 100%;
     box-sizing: border-box;
+    background: #fff;
   }
 
   .field input:disabled {

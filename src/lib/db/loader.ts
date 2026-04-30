@@ -134,17 +134,20 @@ export async function loadFile(
 
   let filePath: string;
   let isParquet = false;
+  const registered: string[] = [];
 
   if (group.parquet) {
     const file = group.parquet;
     const buffer = removeGeoMetaKey(new Uint8Array(await file.arrayBuffer()));
     await db.registerFileBuffer(file.name, buffer);
+    registered.push(file.name);
     filePath = file.name;
     isParquet = true;
   } else if (group.spatial) {
     const file = group.spatial;
     const buffer = new Uint8Array(await file.arrayBuffer());
     await db.registerFileBuffer(file.name, buffer);
+    registered.push(file.name);
     filePath = file.name;
   } else if (group.shapefile) {
     // Register all component files; use the .shp path for ST_Read
@@ -157,6 +160,7 @@ export async function loadFile(
         await db.registerFileBuffer(relPaths[i], buffer);
       }),
     );
+    registered.push(...relPaths);
     filePath = relPaths.find((p) => p.toLowerCase().endsWith(".shp")) ?? relPaths[0];
   } else {
     throw new Error(
@@ -219,6 +223,17 @@ export async function loadFile(
   `);
 
   await conn.query("DROP TABLE raw_layer");
+
+  // Release the input file buffers — they're not read again past this point,
+  // and on a multi-hundred-MB input they'd otherwise stay pinned in WASM heap
+  // through stages 2–5.
+  for (const name of registered) {
+    try {
+      await db.dropFile(name);
+    } catch {
+      // best-effort
+    }
+  }
 }
 
 export async function loadClipFile(
@@ -234,17 +249,20 @@ export async function loadClipFile(
 
   let filePath: string;
   let isParquet = false;
+  const registered: string[] = [];
 
   if (group.parquet) {
     const file = group.parquet;
     const buffer = removeGeoMetaKey(new Uint8Array(await file.arrayBuffer()));
     await db.registerFileBuffer(file.name, buffer);
+    registered.push(file.name);
     filePath = file.name;
     isParquet = true;
   } else if (group.spatial) {
     const file = group.spatial;
     const buffer = new Uint8Array(await file.arrayBuffer());
     await db.registerFileBuffer(file.name, buffer);
+    registered.push(file.name);
     filePath = file.name;
   } else if (group.shapefile) {
     const relPaths = group.shapefile.map(
@@ -256,6 +274,7 @@ export async function loadClipFile(
         await db.registerFileBuffer(relPaths[i], buffer);
       }),
     );
+    registered.push(...relPaths);
     filePath = relPaths.find((p) => p.toLowerCase().endsWith(".shp")) ?? relPaths[0];
   } else {
     throw new Error(
@@ -300,4 +319,12 @@ export async function loadClipFile(
     FROM ${readFn}, bbox
     WHERE ST_Intersects(${rawGeomExpr(geomType, quotedGeomCol)}, bbox.env)
   `);
+
+  for (const name of registered) {
+    try {
+      await db.dropFile(name);
+    } catch {
+      // best-effort
+    }
+  }
 }

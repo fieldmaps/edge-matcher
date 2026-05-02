@@ -6,12 +6,14 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview",
+    "preview": "npm run build && wrangler dev",
     "check": "astro check",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "update": "npx npm-check-updates -u && npm install"
+    "update": "npx npm-check-updates -u && npm install",
+    "generate-types": "wrangler types",
+    "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
@@ -28,9 +30,11 @@
     "prettier-plugin-astro": "^0.14.1",
     "svelte": "^5.55.5",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.59.1"
+    "typescript-eslint": "^8.59.1",
+    "wrangler": "^4.87.0"
   },
   "dependencies": {
+    "@astrojs/cloudflare": "^13.3.0",
     "@duckdb/duckdb-wasm": "^1.33.1-dev53.0",
     "buffer": "^6.0.3",
     "fflate": "^0.8.2",
@@ -38,5 +42,8 @@
     "maplibre-gl": "^5.24.0",
     "mapshaper": "^0.7.6",
     "mproj": "^0.0.40"
+  },
+  "overrides": {
+    "vite": "^7"
   }
 }

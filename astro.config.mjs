@@ -2,8 +2,11 @@ import svelte from "@astrojs/svelte";
 import { defineConfig } from "astro/config";
 import { fileURLToPath } from "node:url";
 
+import cloudflare from "@astrojs/cloudflare";
+
 export default defineConfig({
   integrations: [svelte()],
+
   vite: {
     resolve: {
       alias: {
@@ -26,4 +29,6 @@ export default defineConfig({
       cssCodeSplit: false,
     },
   },
+
+  adapter: cloudflare(),
 });

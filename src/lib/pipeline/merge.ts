@@ -94,10 +94,10 @@ export async function stageMerge(conn: AsyncDuckDBConnection): Promise<void> {
     FROM pts_as_list
   `);
 
-  // Release upstream tables before the noding stage.
+  // Release upstream tables before the noding stage. layer_04 is kept alive
+  // because the orphan fallback in _05 routes by Voronoi-cell containment.
   await conn.query("DROP TABLE IF EXISTS layer_02a");
   await conn.query("DROP TABLE IF EXISTS layer_03a");
-  await conn.query("DROP TABLE IF EXISTS layer_04");
   await conn.query("DROP TABLE IF EXISTS layer_05_tmp1");
 
   // _05_tmp3: split noding+polygonize from the spatial join so DuckDB can
@@ -135,7 +135,11 @@ export async function stageMerge(conn: AsyncDuckDBConnection): Promise<void> {
   // _05: assign each cell to its source polygon. Bbox-prefiltered ST_Within
   // plans as PIECEWISE_MERGE_JOIN with ST_Within as a residual FILTER — no
   // SPATIAL_JOIN, no memory_limit override needed. LEFT JOIN catches orphan
-  // cells; nearest-neighbor fallback assigns them to the closest polygon.
+  // cells — sub-cells too small to contain any layer_01 interior point (e.g.
+  // tiny slivers in stairstep boundary regions). Each orphan is routed to the
+  // fid whose Voronoi cell (layer_04) contains the orphan's interior point —
+  // that's the territory map the pipeline already trusts. Distance-to-nearest
+  // layer_01 point would mis-route slivers in stairstep zones, ignoring topology.
   await conn.query(`--sql
     CREATE OR REPLACE TABLE layer_05 AS
     WITH
@@ -154,16 +158,20 @@ export async function stageMerge(conn: AsyncDuckDBConnection): Promise<void> {
       QUALIFY ROW_NUMBER() OVER (PARTITION BY c.cid ORDER BY p.fid NULLS LAST) = 1
     ),
     unmatched AS (
-      SELECT ROW_NUMBER() OVER () AS uid, vgeom
+      SELECT ROW_NUMBER() OVER () AS uid, vgeom,
+             ST_PointOnSurface(vgeom) AS upt
       FROM all_joined WHERE fid IS NULL
     ),
     fallback AS (
-      SELECT u.vgeom, p.* EXCLUDE (pt)
-      FROM unmatched u CROSS JOIN layer_05_tmp4 p
-      QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY u.uid
-        ORDER BY ST_Distance(ST_Centroid(u.vgeom), p.pt)
-      ) = 1
+      SELECT u.vgeom, o.* EXCLUDE (geom)
+      FROM unmatched u
+      JOIN layer_04 v
+        ON ST_X(u.upt) >= ST_XMin(v.geom)
+       AND ST_X(u.upt) <= ST_XMax(v.geom)
+       AND ST_Y(u.upt) >= ST_YMin(v.geom)
+       AND ST_Y(u.upt) <= ST_YMax(v.geom)
+       AND ST_Within(u.upt, v.geom)
+      JOIN layer_01 o ON o.fid = v.fid
     )
     SELECT * EXCLUDE (vgeom), ST_Collect(list(vgeom)) AS geom
     FROM (
@@ -174,6 +182,7 @@ export async function stageMerge(conn: AsyncDuckDBConnection): Promise<void> {
     GROUP BY ALL
   `);
 
+  await conn.query("DROP TABLE IF EXISTS layer_04");
   await conn.query("DROP TABLE IF EXISTS layer_05_tmp3");
   await conn.query("DROP TABLE IF EXISTS layer_05_tmp4");
 }

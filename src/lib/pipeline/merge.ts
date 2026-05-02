@@ -173,7 +173,7 @@ export async function stageMerge(conn: AsyncDuckDBConnection): Promise<void> {
        AND ST_Within(u.upt, v.geom)
       JOIN layer_01 o ON o.fid = v.fid
     )
-    SELECT * EXCLUDE (vgeom), ST_Collect(list(vgeom)) AS geom
+    SELECT * EXCLUDE (vgeom), ST_Union_Agg(vgeom) AS geom
     FROM (
       SELECT * FROM all_joined WHERE fid IS NOT NULL
       UNION ALL

@@ -47,10 +47,12 @@ export async function stageVoronoi(conn: AsyncDuckDBConnection): Promise<void> {
   await conn.query("DROP TABLE IF EXISTS layer_03b");
   await conn.query("DROP TABLE IF EXISTS layer_04_tmp1");
 
-  // Union Voronoi cells by fid
+  // Union Voronoi cells by fid. ST_MakeValid defends against invalid cells
+  // produced by ST_VoronoiDiagram on degenerate point configurations — feeding
+  // an invalid polygon to ST_Union_Agg segfaults GEOS.
   await conn.query(`--sql
     CREATE OR REPLACE TABLE layer_04 AS
-    SELECT fid, ST_Union_Agg(geom) AS geom
+    SELECT fid, ST_Union_Agg(ST_MakeValid(geom)) AS geom
     FROM layer_04_tmp2
     GROUP BY fid
   `);

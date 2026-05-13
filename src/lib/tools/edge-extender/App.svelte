@@ -1,13 +1,12 @@
 <script lang="ts">
   import { duckdbState, initDuckDB } from "$lib/db/duckdb.svelte";
   import { loadClipFile, loadFile } from "$lib/db/loader";
-  import { runClip } from "$lib/pipeline/clip";
-  import { getOriginalGeojson, PipelineError, runPipeline } from "$lib/pipeline/index";
+  import { runClip } from "./pipeline/clip";
+  import { getOriginalGeojson, PipelineError, runPipeline } from "./pipeline/index";
   import { onMount, untrack } from "svelte";
-  import DownloadMenu from "./DownloadMenu.svelte";
-  import DropZone from "./DropZone.svelte";
-  import MapView from "./MapView.svelte";
-  import OfflineToggle from "./OfflineToggle.svelte";
+  import DownloadMenu from "$lib/components/DownloadMenu.svelte";
+  import DropZone from "$lib/components/DropZone.svelte";
+  import MapView from "$lib/components/MapView.svelte";
 
   const STAGE_LABELS = [
     "Load file",
@@ -166,8 +165,8 @@
 <div class="layout">
   <aside class="sidebar">
     <header>
-      <h1>Edge Matcher</h1>
-      <p class="tagline">Edge Extender + clip — fully in your browser.</p>
+      <a class="back" href="/">← Topology Tools</a>
+      <h1>Edge Extender</h1>
       <p class="blurb">
         Extend polygon boundaries outward to meet a parent boundary — for example ADM3 sub-national
         areas that fall short of their ADM0 country edge. Drop a polygon layer; the tool extends
@@ -285,7 +284,6 @@
       {/if}
     </section>
 
-    <OfflineToggle />
     <p class="privacy">Your files never leave your device.</p>
   </aside>
 
@@ -323,14 +321,19 @@
     font-size: 1.25rem;
     font-weight: 700;
     color: #111;
-    margin: 0 0 0.25rem;
+    margin: 0 0 0.5rem;
   }
 
-  .tagline {
-    font-size: 0.8rem;
+  .back {
+    display: inline-block;
+    font-size: 0.75rem;
     color: #6b7280;
-    margin: 0 0 0.6rem;
-    line-height: 1.4;
+    text-decoration: none;
+    margin: 0 0 0.5rem;
+  }
+
+  .back:hover {
+    color: #111;
   }
 
   .blurb {

@@ -8,8 +8,12 @@
   const LAND_GEOJSON_URL = "/data/ne_50m_land.geojson";
   const LS_KEY = "edge-matcher:offline-ready";
 
-  type Status = "idle" | "downloading" | "ready" | "failed";
-  let status = $state<Status>("idle");
+  // "loading" is a pre-hydration sentinel: SSR/initial client render shows
+  // nothing so the user never sees a wrong-state flash (e.g. "Enable offline
+  // use" briefly visible before localStorage is checked and we switch to
+  // "Offline ready"). onMount resolves it to the real initial status.
+  type Status = "loading" | "idle" | "downloading" | "ready" | "removing" | "failed";
+  let status = $state<Status>("loading");
   let progress = $state(0);
   let total = $state(0);
   let errorMsg = $state<string | null>(null);
@@ -17,6 +21,8 @@
   onMount(() => {
     if (typeof localStorage !== "undefined" && localStorage.getItem(LS_KEY) === "1") {
       status = "ready";
+    } else {
+      status = "idle";
     }
   });
 
@@ -95,6 +101,40 @@
     }
   }
 
+  async function disable() {
+    const ok = window.confirm(
+      "Remove offline cache?\n\nThis deletes the cached app shell, DuckDB, spatial extension, and basemap data, then unregisters the service worker. The next page load will fetch from the network again. Use this if you're troubleshooting after an update.",
+    );
+    if (!ok) return;
+
+    status = "removing";
+    errorMsg = null;
+
+    try {
+      // 1. Delete every cache on this origin (precache + runtime caches).
+      if ("caches" in self) {
+        const names = await caches.keys();
+        await Promise.all(names.map((n) => caches.delete(n)));
+      }
+
+      // 2. Unregister all service workers for this origin.
+      if (navigator.serviceWorker) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+
+      // 3. Clear the offline-ready flag.
+      localStorage.removeItem(LS_KEY);
+
+      status = "idle";
+      progress = 0;
+      total = 0;
+    } catch (e) {
+      errorMsg = e instanceof Error ? e.message : String(e);
+      status = "failed";
+    }
+  }
+
   function fmt(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
@@ -103,7 +143,9 @@
 </script>
 
 <div class="offline">
-  {#if status === "idle"}
+  {#if status === "loading"}
+    <!-- Reserved-space placeholder; prevents flash + layout shift before hydration. -->
+  {:else if status === "idle"}
     <button type="button" onclick={enable}>Enable offline use</button>
     <p class="hint">Downloads ~50&nbsp;MB so the tool works without network.</p>
   {:else if status === "downloading"}
@@ -116,6 +158,9 @@
     {/if}
   {:else if status === "ready"}
     <p class="ready">Offline ready</p>
+    <button type="button" class="remove" onclick={disable}>Remove offline cache</button>
+  {:else if status === "removing"}
+    <button type="button" disabled>Removing…</button>
   {:else if status === "failed"}
     <button type="button" onclick={enable}>Retry offline download</button>
     {#if errorMsg}<p class="err">{errorMsg}</p>{/if}
@@ -127,6 +172,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+    min-height: 56px;
   }
   button {
     padding: 0.5rem 0.75rem;
@@ -152,6 +198,20 @@
     font-size: 0.8rem;
     color: #047857;
     margin: 0;
+  }
+  .remove {
+    align-self: flex-start;
+    padding: 0.25rem 0;
+    background: transparent;
+    border: none;
+    font-size: 0.75rem;
+    color: #6b7280;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .remove:hover:not(:disabled) {
+    color: #b91c1c;
+    background: transparent;
   }
   .err {
     font-size: 0.75rem;

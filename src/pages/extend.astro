@@ -1,0 +1,11 @@
+---
+import Layout from "../layouts/Layout.astro";
+import App from "$lib/tools/edge-extender/App.svelte";
+---
+
+<Layout
+  title="Edge Extender — fix polygon boundary gaps in your browser"
+  description="Browser-only tool that extends polygon boundaries using Voronoi diagrams to fix gaps and overlaps between adjacent administrative areas."
+>
+  <App client:load />
+</Layout>

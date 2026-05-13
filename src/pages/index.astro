@@ -1,42 +1,104 @@
 ---
-import App from "../lib/components/App.svelte";
+import Layout from "../layouts/Layout.astro";
+import ToolCard from "$lib/components/ToolCard.astro";
+import OfflineToggle from "$lib/components/OfflineToggle.svelte";
+import { tools } from "$lib/tools";
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="Browser-only tool that extends polygon boundaries using Voronoi diagrams to fix gaps and overlaps between adjacent administrative areas."
-    />
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#dde6ed" />
-    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <title>Edge Matcher — fix polygon boundary gaps in your browser</title>
-    <script is:inline src="/registerSW.js" defer></script>
-  </head>
-  <body>
-    <App client:load />
-  </body>
-</html>
+<Layout
+  title="Topology Tools — browser-only geospatial utilities"
+  description="A suite of browser-only geospatial topology tools. All processing runs client-side; your files never leave your device."
+>
+  <main class="page">
+    <header class="hero">
+      <h1>Topology Tools</h1>
+      <p class="tagline">
+        Browser-only geospatial topology utilities. All processing runs client-side via
+        WebAssembly — your files never leave your device.
+      </p>
+    </header>
 
-<style is:global>
-  *,
-  *::before,
-  *::after {
-    box-sizing: border-box;
+    <section class="tools">
+      <h2 class="section-heading">Tools</h2>
+      <div class="grid">
+        {tools.map((tool) => <ToolCard tool={tool} />)}
+      </div>
+    </section>
+
+    <section class="settings">
+      <h2 class="section-heading">Site settings</h2>
+      <div class="settings-card">
+        <OfflineToggle client:load />
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p>Made by <a href="https://fieldmaps.io">fieldmaps</a>.</p>
+    </footer>
+  </main>
+</Layout>
+
+<style>
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2.5rem;
   }
-  html,
-  body {
+  .hero h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #111;
+    margin: 0 0 0.75rem;
+    letter-spacing: -0.01em;
+  }
+  .hero .tagline {
+    font-size: 1rem;
+    color: #4b5563;
     margin: 0;
-    padding: 0;
-    height: 100%;
-    font-family:
-      system-ui,
-      -apple-system,
-      sans-serif;
+    line-height: 1.55;
+    max-width: 56ch;
+  }
+  .section-heading {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 0.75rem;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+  @media (min-width: 640px) {
+    .grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  .settings-card {
+    padding: 1rem 1.25rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #fff;
+    /* Reserve space so the footer below doesn't shift while the
+       OfflineToggle island hydrates (pre-hydration the inner .offline
+       div is empty). */
+    min-height: 88px;
+  }
+  .footer {
+    border-top: 1px solid #e5e7eb;
+    padding-top: 1.25rem;
+  }
+  .footer p {
+    margin: 0;
+    font-size: 0.825rem;
+    color: #6b7280;
+  }
+  .footer a {
+    color: #374151;
   }
 </style>

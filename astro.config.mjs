@@ -21,9 +21,9 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       },
       manifest: {
-        name: "Edge Matcher",
-        short_name: "Edge Matcher",
-        description: "Extend polygon boundaries with Voronoi diagrams, entirely in the browser.",
+        name: "Topology Tools",
+        short_name: "Topology Tools",
+        description: "Browser-only geospatial topology utilities. Runs entirely in your browser.",
         theme_color: "#dde6ed",
         background_color: "#ffffff",
         display: "standalone",

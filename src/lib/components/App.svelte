@@ -7,6 +7,7 @@
   import DownloadMenu from "./DownloadMenu.svelte";
   import DropZone from "./DropZone.svelte";
   import MapView from "./MapView.svelte";
+  import OfflineToggle from "./OfflineToggle.svelte";
 
   const STAGE_LABELS = [
     "Load file",
@@ -284,6 +285,7 @@
       {/if}
     </section>
 
+    <OfflineToggle />
     <p class="privacy">Your files never leave your device.</p>
   </aside>
 

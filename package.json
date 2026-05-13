@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "sync:assets": "node scripts/sync-duckdb-extensions.mjs && node scripts/sync-natural-earth.mjs",
+    "predev": "npm run sync:assets",
     "dev": "astro dev",
+    "prebuild": "npm run sync:assets",
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
@@ -19,6 +22,7 @@
     "@eslint/compat": "^2.0.5",
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.6.0",
+    "@vite-pwa/astro": "^1.2.0",
     "astro": "^6.1.10",
     "eslint": "^10.2.1",
     "eslint-config-prettier": "^10.1.8",

@@ -11,7 +11,12 @@ import App from "../lib/components/App.svelte";
       name="description"
       content="Browser-only tool that extends polygon boundaries using Voronoi diagrams to fix gaps and overlaps between adjacent administrative areas."
     />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#dde6ed" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <title>Edge Matcher — fix polygon boundary gaps in your browser</title>
+    <script is:inline src="/registerSW.js" defer></script>
   </head>
   <body>
     <App client:load />

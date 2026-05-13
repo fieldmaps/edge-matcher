@@ -23,4 +23,9 @@ npm-debug.log*
 *.swp
 *.swo
 
-.claude/settings.local.json
+.claude/
+.playwright-cli/
+
+# Assets synced at build time by scripts/sync-*.mjs — see package.json prebuild
+public/duckdb/
+public/data/

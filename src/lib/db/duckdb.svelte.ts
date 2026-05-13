@@ -1,5 +1,23 @@
 import * as duckdb from "@duckdb/duckdb-wasm";
 
+// Self-hosted bundles. Vite's `?url` emits each asset into dist/_astro/ with a
+// content-hashed filename, so upgrades to @duckdb/duckdb-wasm automatically
+// bust any service-worker runtime cache for these files.
+//
+// Only mvp and eh are exposed — matching duckdb-wasm's own getJsDelivrBundles(),
+// which deliberately omits coi. The coi pthread worker breaks the OPFS data-DB
+// postMessage path with "FileSystemSyncAccessHandle could not be cloned". The
+// app runs threads=1 anyway, so dropping coi loses nothing.
+import duckdbMvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
+import duckdbEhWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
+import duckdbMvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
+import duckdbEhWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
+
+export const DUCKDB_BUNDLES: duckdb.DuckDBBundles = {
+  mvp: { mainModule: duckdbMvpWasm, mainWorker: duckdbMvpWorker },
+  eh: { mainModule: duckdbEhWasm, mainWorker: duckdbEhWorker },
+};
+
 class DuckDBState {
   db: duckdb.AsyncDuckDB | null = null;
   conn: duckdb.AsyncDuckDBConnection | null = null;
@@ -27,19 +45,14 @@ function makeSessionDbName(): string {
 export async function initDuckDB(): Promise<void> {
   if (duckdbState.ready || duckdbState.initError) return;
   try {
-    const bundles = duckdb.getJsDelivrBundles();
-    const bundle = await duckdb.selectBundle(bundles);
+    const bundle = await duckdb.selectBundle(DUCKDB_BUNDLES);
 
-    const workerUrl = URL.createObjectURL(
-      new Blob([`importScripts("${bundle.mainWorker}");`], {
-        type: "text/javascript",
-      }),
-    );
-    const worker = new Worker(workerUrl);
+    // Self-hosted same-origin worker — no blob wrapper needed (that was a
+    // workaround for cross-origin CDN delivery under COEP require-corp).
+    const worker = new Worker(bundle.mainWorker!);
     const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
     const instance = new duckdb.AsyncDuckDB(logger, worker);
     await instance.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    URL.revokeObjectURL(workerUrl);
 
     // OPFS-backed DB session enables duckdb-wasm's auto OPFS file-handling
     // path (shouldOPFSFileHandling() in the runtime). Auto mode auto-registers
@@ -85,6 +98,10 @@ export async function initDuckDB(): Promise<void> {
     await conn.query("SET preserve_insertion_order = false");
 
     try {
+      // Point INSTALL at our self-hosted extension repo so installation works
+      // offline. Files under public/duckdb/extensions/v{engine}/wasm_{platform}/
+      // are kept in sync via scripts/sync-duckdb-extensions.mjs.
+      await conn.query("SET custom_extension_repository = '/duckdb/extensions';");
       try {
         await conn.query("LOAD spatial;");
       } catch {

@@ -16,10 +16,12 @@ cleanupOutdatedCaches();
 // setup (likely a generateSW/RegExpRoute interaction); writing the fetch
 // handler directly keeps the behaviour transparent and predictable.
 //
-// The duckdb-wasm engine binaries live on jsDelivr (see src/lib/db/duckdb.svelte.ts
-// for why); everything else is same-origin. Matchers take the whole URL so
-// each route decides its own origin policy.
+// Both DuckDB wasm bundles are loaded from upstream: engine from jsDelivr
+// (Cloudflare 25 MiB cap on static assets), spatial extension from the
+// canonical extensions.duckdb.org (which DuckDB itself version-pins via the
+// engine's compile-time version). Each route owns its origin policy.
 const JSDELIVR = "https://cdn.jsdelivr.net";
+const DUCKDB_EXT = "https://extensions.duckdb.org";
 const RUNTIME_CACHES: { name: string; match: (u: URL) => boolean }[] = [
   {
     name: "duckdb-wasm",
@@ -30,7 +32,8 @@ const RUNTIME_CACHES: { name: string; match: (u: URL) => boolean }[] = [
   {
     name: "duckdb-extensions",
     match: (u) =>
-      u.origin === self.location.origin && /\/duckdb\/extensions\/.*\.wasm$/.test(u.pathname),
+      u.origin === DUCKDB_EXT &&
+      /^\/v[\d.]+\/wasm_(mvp|eh|threads)\/.+\.duckdb_extension\.wasm$/.test(u.pathname),
   },
   {
     name: "basemap",

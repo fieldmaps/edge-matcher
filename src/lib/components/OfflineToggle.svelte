@@ -1,10 +1,8 @@
 <script lang="ts">
   import * as duckdb from "@duckdb/duckdb-wasm";
-  import { DUCKDB_BUNDLES } from "$lib/db/duckdb.svelte";
+  import { DUCKDB_BUNDLES, duckdbState, initDuckDB } from "$lib/db/duckdb.svelte";
   import { onMount } from "svelte";
 
-  // Keep in sync with scripts/sync-duckdb-extensions.mjs.
-  const DUCKDB_ENGINE_VERSION = "v1.5.2";
   const LAND_GEOJSON_URL = "/data/ne_50m_land.geojson";
   const LS_KEY = "edge-matcher:offline-ready";
 
@@ -66,13 +64,23 @@
     errorMsg = null;
 
     try {
+      // Ensure DuckDB is initialized — we read the engine version from the
+      // running instance to construct the extension URL, instead of pinning a
+      // constant that would drift out of sync with the installed package.
+      await initDuckDB();
+      const conn = duckdbState.conn;
+      if (!conn) throw new Error(duckdbState.initError ?? "DuckDB failed to initialize");
+
+      const versionRow = (await conn.query("SELECT version() AS v")).toArray()[0] as { v: string };
+      const engineVersion = versionRow.v.startsWith("v") ? versionRow.v : `v${versionRow.v}`;
+
       // Pick the bundle the current browser will actually load at runtime.
       const bundle = await duckdb.selectBundle(DUCKDB_BUNDLES);
       const variantName = (Object.keys(DUCKDB_BUNDLES) as Array<keyof typeof DUCKDB_BUNDLES>).find(
         (k) => DUCKDB_BUNDLES[k]!.mainModule === bundle.mainModule,
       );
       const platform = variantToPlatform(variantName ?? "mvp");
-      const extensionUrl = `/duckdb/extensions/${DUCKDB_ENGINE_VERSION}/${platform}/spatial.duckdb_extension.wasm`;
+      const extensionUrl = `https://extensions.duckdb.org/${engineVersion}/${platform}/spatial.duckdb_extension.wasm`;
 
       const urls: string[] = [
         bundle.mainModule, // duckdb-{variant}.wasm

@@ -103,10 +103,9 @@ export async function initDuckDB(): Promise<void> {
     await conn.query("SET preserve_insertion_order = false");
 
     try {
-      // Point INSTALL at our self-hosted extension repo so installation works
-      // offline. Files under public/duckdb/extensions/v{engine}/wasm_{platform}/
-      // are kept in sync via scripts/sync-duckdb-extensions.mjs.
-      await conn.query("SET custom_extension_repository = '/duckdb/extensions';");
+      // Default extension repo (extensions.duckdb.org) is fine — INSTALL fetches
+      // the right engine version automatically. Same delivery mechanism as the
+      // engine wasm (upstream-hosted, version baked into URL by DuckDB itself).
       try {
         await conn.query("LOAD spatial;");
       } catch {

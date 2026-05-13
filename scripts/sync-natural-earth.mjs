@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// Downloads Natural Earth 1:50m land polygons into public/data/. Runs from
-// `prebuild`. Skips if already present; pass `--force` to re-download.
+// Downloads Natural Earth 1:50m land polygons into public/data/ on every
+// build. Always fetches fresh — keeps the deployed copy in lockstep with
+// upstream `master`.
 //
 // Source: martynafford/natural-earth-geojson (public domain Natural Earth
 // data, pre-converted to GeoJSON). ~2.7 MB uncompressed, ~500 KB gzipped.
 
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
-const FORCE = process.argv.includes("--force");
 
 const FILES = [
   {
@@ -20,21 +20,8 @@ const FILES = [
   },
 ];
 
-async function exists(p) {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 for (const { url, dest } of FILES) {
   const rel = dest.replace(ROOT + "/", "");
-  if (!FORCE && (await exists(dest))) {
-    console.log(`cached ${rel}`);
-    continue;
-  }
   process.stdout.write(`fetching ${url} ... `);
   const res = await fetch(url);
   if (!res.ok) {

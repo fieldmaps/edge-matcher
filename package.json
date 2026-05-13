@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "sync:assets": "node scripts/sync-duckdb-extensions.mjs && node scripts/sync-natural-earth.mjs",
+    "sync:assets": "node scripts/sync-natural-earth.mjs",
     "predev": "npm run sync:assets",
     "dev": "astro dev",
     "prebuild": "npm run sync:assets",

@@ -47,12 +47,6 @@ export default defineConfig({
         $lib: fileURLToPath(new URL("./src/lib", import.meta.url)),
       },
     },
-    server: {
-      headers: {
-        "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Embedder-Policy": "require-corp",
-      },
-    },
     optimizeDeps: {
       exclude: ["@duckdb/duckdb-wasm"],
     },

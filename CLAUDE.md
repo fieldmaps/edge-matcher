@@ -14,6 +14,18 @@
 - Keep explanations brief and to the point
 - Accuracy over speed
 
+## Solution Choice
+
+- Optimise for the best long-term answer, not the smallest delta from the
+  current state. "Minimal change" is expedient, not principled — don't default
+  to it. If you're proposing it for scope reasons, say so explicitly.
+- When two clean endpoints exist (all-A or all-B), lead with the better one.
+  Don't propose hybrids that split the difference unless the hybrid is
+  genuinely better than both endpoints — mixed states usually carry the
+  costs of both options without the full benefits of either.
+- When recommending an approach, name the endpoint you'd actually pick and
+  why, before listing alternatives.
+
 ## Commands
 
 ```bash
@@ -73,7 +85,7 @@ File drop → format detection + ZIP extraction (DropZone)
 - **DuckDB WASM constraints:** single-threaded (`SET threads = 1`), vite optimization excluded. The `duckdb.svelte.ts` singleton initializes the spatial extension and handles connection lifecycle.
 - **Retry on failure:** `src/lib/tools/edge-extender/pipeline/index.ts` automatically retries with doubled point-spacing distance when Voronoi generation fails (memory/precision issues).
 - **Tool layout convention:** Each tool lives at `src/lib/tools/<slug>/` (its `App.svelte` + a `pipeline/` directory if it has one) and has a route at `src/pages/<slug>.astro`. Shared infrastructure stays in `src/lib/db/` (DuckDB singleton + loader + export) and `src/lib/components/` (DropZone, MapView, DownloadMenu, OfflineToggle, ToolCard). Adding a tool = new folder under `tools/`, new entry in `src/lib/tools.ts`, new page, optionally an icon under `public/icons/tools/`. No infrastructure changes.
-- **COEP/COOP headers required:** `SharedArrayBuffer` (needed by DuckDB) requires `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`. These are set in `astro.config.mjs` (dev server) and `public/_headers` (Netlify/Cloudflare deploy).
+- **No COEP/COOP.** The mvp/eh DuckDB variants are single-threaded and don't need SharedArrayBuffer (and we exclude the coi variant anyway — it breaks OPFS FSAH clones). Dropping COEP `require-corp` is what lets us fetch the spatial extension cross-origin from `extensions.duckdb.org` (which doesn't send CORP). Don't re-add COEP unless you've audited the cross-origin fetches it would block.
 - **Svelte 5 runes:** Uses `$state()`, `$effect()`, and `untrack()` — not legacy Svelte reactivity.
 - **Path alias:** `$lib` resolves to `src/lib/` (configured in both the Vite alias in `astro.config.mjs` and the `paths` map in `tsconfig.json` so Astro/TS check sees it too).
 

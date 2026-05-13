@@ -1,21 +1,26 @@
 import * as duckdb from "@duckdb/duckdb-wasm";
 
-// Self-hosted bundles. Vite's `?url` emits each asset into dist/_astro/ with a
-// content-hashed filename, so upgrades to @duckdb/duckdb-wasm automatically
-// bust any service-worker runtime cache for these files.
+// Workers stay self-hosted (small JS files, no size cap problem) so we don't
+// need a Blob shim around them. The engine `.wasm` binaries are loaded from
+// jsDelivr because Cloudflare Workers Static Assets caps individual files at
+// 25 MiB and the engine wasms are ~34–39 MiB. jsDelivr serves them with
+// Cross-Origin-Resource-Policy: cross-origin + Access-Control-Allow-Origin: *,
+// which satisfies our COEP require-corp. The SW (src/sw.ts) caches them on
+// first load so subsequent loads work offline.
 //
-// Only mvp and eh are exposed — matching duckdb-wasm's own getJsDelivrBundles(),
-// which deliberately omits coi. The coi pthread worker breaks the OPFS data-DB
+// Only mvp and eh are exposed. The coi pthread worker breaks the OPFS data-DB
 // postMessage path with "FileSystemSyncAccessHandle could not be cloned". The
 // app runs threads=1 anyway, so dropping coi loses nothing.
-import duckdbMvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
-import duckdbEhWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import duckdbMvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
 import duckdbEhWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
 
+// duckdb-wasm's helper bakes its own installed version into the jsDelivr URLs,
+// so this stays in lock-step with package.json automatically.
+const jsdelivr = duckdb.getJsDelivrBundles();
+
 export const DUCKDB_BUNDLES: duckdb.DuckDBBundles = {
-  mvp: { mainModule: duckdbMvpWasm, mainWorker: duckdbMvpWorker },
-  eh: { mainModule: duckdbEhWasm, mainWorker: duckdbEhWorker },
+  mvp: { mainModule: jsdelivr.mvp!.mainModule, mainWorker: duckdbMvpWorker },
+  eh: { mainModule: jsdelivr.eh!.mainModule, mainWorker: duckdbEhWorker },
 };
 
 class DuckDBState {

@@ -15,19 +15,35 @@ cleanupOutdatedCaches();
 // Hand-rolled runtime caching. Workbox's registerRoute() did not fire in our
 // setup (likely a generateSW/RegExpRoute interaction); writing the fetch
 // handler directly keeps the behaviour transparent and predictable.
-const RUNTIME_CACHES = [
-  { name: "duckdb-wasm", match: /\/_astro\/duckdb-[a-z]+\.[^/]+\.wasm$/ },
-  { name: "duckdb-extensions", match: /\/duckdb\/extensions\/.*\.wasm$/ },
-  { name: "basemap", match: /\/data\/.*\.geojson$/ },
+//
+// The duckdb-wasm engine binaries live on jsDelivr (see src/lib/db/duckdb.svelte.ts
+// for why); everything else is same-origin. Matchers take the whole URL so
+// each route decides its own origin policy.
+const JSDELIVR = "https://cdn.jsdelivr.net";
+const RUNTIME_CACHES: { name: string; match: (u: URL) => boolean }[] = [
+  {
+    name: "duckdb-wasm",
+    match: (u) =>
+      u.origin === JSDELIVR &&
+      /^\/npm\/@duckdb\/duckdb-wasm@[^/]+\/dist\/duckdb-(mvp|eh)\.wasm$/.test(u.pathname),
+  },
+  {
+    name: "duckdb-extensions",
+    match: (u) =>
+      u.origin === self.location.origin && /\/duckdb\/extensions\/.*\.wasm$/.test(u.pathname),
+  },
+  {
+    name: "basemap",
+    match: (u) => u.origin === self.location.origin && /\/data\/.*\.geojson$/.test(u.pathname),
+  },
 ];
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;
 
-  const route = RUNTIME_CACHES.find((r) => r.match.test(url.pathname));
+  const route = RUNTIME_CACHES.find((r) => r.match(url));
   if (!route) return;
 
   event.respondWith(
